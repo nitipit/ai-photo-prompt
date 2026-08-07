@@ -1,0 +1,170 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="1800" viewBox="0 0 1400 1800">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#111936"/>
+      <stop offset="1" stop-color="#26366a"/>
+    </linearGradient>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#79d7d2"/>
+      <stop offset="1" stop-color="#d8f0e7"/>
+    </linearGradient>
+    <linearGradient id="result" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#ffb55d"/>
+      <stop offset="1" stop-color="#ee6c62"/>
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="12" stdDeviation="12" flood-color="#070b1c" flood-opacity=".28"/>
+    </filter>
+    <style>
+      .title { font-family: 'Noto Sans Thai','DejaVu Sans',sans-serif; fill: #fff8e9; }
+      .ink { font-family: 'Noto Sans Thai','DejaVu Sans',sans-serif; fill: #17203d; }
+      .muted { font-family: 'Noto Sans Thai','DejaVu Sans',sans-serif; fill: #66708e; }
+      .small { font-size: 14px; }
+      .body { font-size: 19px; }
+      .label { font-size: 16px; font-weight: 700; letter-spacing: .6px; }
+      .scene { font-size: 18px; font-weight: 800; }
+      .button { fill: #ee6c62; }
+      .buttonText { font-family: 'Noto Sans Thai','DejaVu Sans',sans-serif; fill: #fff8e9; font-size: 16px; font-weight: 800; }
+      .card { fill: #fffaf0; }
+    </style>
+  </defs>
+
+  <rect width="1400" height="1800" fill="url(#bg)"/>
+  <circle cx="1320" cy="80" r="180" fill="#79d7d2" opacity=".12"/>
+  <circle cx="80" cy="1710" r="250" fill="#f5a54a" opacity=".10"/>
+
+  <text x="50" y="62" class="title" font-size="34" font-weight="800">PHOTO PROMPT</text>
+  <text x="50" y="98" class="title" font-size="18" opacity=".72">Confirmed scene concept · seven pages · every scene is 16:9</text>
+  <rect x="1130" y="43" width="220" height="42" rx="21" fill="#ffffff" opacity=".12"/>
+  <text x="1240" y="69" text-anchor="middle" class="title" font-size="15">16:9 content frame</text>
+
+  <!-- 1 Ready: 640x360 -->
+  <g transform="translate(40 140)">
+    <rect width="640" height="360" rx="22" class="card" filter="url(#shadow)"/>
+    <text x="24" y="32" class="ink scene">01 · READY</text>
+    <rect x="24" y="52" width="592" height="280" rx="16" fill="#17203d"/>
+    <circle cx="320" cy="151" r="48" fill="#f5a54a"/>
+    <rect x="289" y="126" width="62" height="48" rx="13" fill="#fff8e9"/>
+    <circle cx="320" cy="150" r="15" fill="#17203d"/>
+    <path d="M300 126 L309 112 L331 112 L340 126" fill="none" stroke="#fff8e9" stroke-width="8" stroke-linecap="round"/>
+    <text x="320" y="214" text-anchor="middle" class="title" font-size="21" font-weight="800">เขียน Prompt ให้ AI สร้างภาพ</text>
+    <rect x="243" y="244" width="154" height="36" rx="18" class="button"/>
+    <text x="320" y="267" text-anchor="middle" class="buttonText">เริ่มเล่น</text>
+  </g>
+
+  <!-- 2 Level: 640x360 -->
+  <g transform="translate(720 140)">
+    <rect width="640" height="360" rx="22" class="card" filter="url(#shadow)"/>
+    <text x="24" y="32" class="ink scene">02 · LEVEL SELECTION</text>
+    <text x="24" y="62" class="muted small">ชื่อเล่น (ถ้าไม่กรอก: นิรนาม)</text>
+    <rect x="24" y="74" width="592" height="38" rx="12" fill="#ffffff" stroke="#b9c1ce" stroke-width="2"/>
+    <text x="42" y="99" class="muted body">พิมพ์ชื่อเล่น</text>
+    <text x="24" y="145" class="ink" font-size="21" font-weight="800">เลือกกลุ่มระดับ</text>
+    <g transform="translate(24 160)">
+      <rect width="286" height="48" rx="13" fill="#79d7d2"/>
+      <text x="143" y="31" text-anchor="middle" class="ink" font-size="17" font-weight="800">ป.1 – ป.3</text>
+      <rect x="306" width="286" height="48" rx="13" fill="#d8e8b0"/>
+      <text x="449" y="31" text-anchor="middle" class="ink" font-size="17" font-weight="800">ป.4 – ป.6</text>
+      <rect y="60" width="286" height="48" rx="13" fill="#f5c66c"/>
+      <text x="143" y="91" text-anchor="middle" class="ink" font-size="17" font-weight="800">ม.1 – ม.3</text>
+      <rect x="306" y="60" width="286" height="48" rx="13" fill="#ee9a82"/>
+      <text x="449" y="91" text-anchor="middle" class="ink" font-size="17" font-weight="800">ม.4 – ม.6</text>
+    </g>
+    <rect x="456" y="296" width="160" height="36" rx="18" class="button"/>
+    <text x="536" y="319" text-anchor="middle" class="buttonText">ไปต่อ</text>
+  </g>
+
+  <!-- 3 Challenge: 640x360 -->
+  <g transform="translate(40 540)">
+    <rect width="640" height="360" rx="22" class="card" filter="url(#shadow)"/>
+    <text x="24" y="32" class="ink scene">03 · CHALLENGE REVEAL</text>
+    <rect x="24" y="58" width="334" height="274" rx="16" fill="url(#sky)"/>
+    <circle cx="286" cy="112" r="36" fill="#f5c66c"/>
+    <path d="M24 291 L126 164 L190 236 L248 177 L358 291 Z" fill="#527a75"/>
+    <path d="M24 291 L104 214 L151 261 L211 213 L358 291 Z" fill="#284b58" opacity=".84"/>
+    <text x="390" y="137" class="ink" font-size="25" font-weight="900">สังเกตภาพนี้</text>
+    <text x="390" y="174" class="ink body">แล้วคิดว่าจะบอก AI</text>
+    <text x="390" y="202" class="ink body">อย่างไร</text>
+    <rect x="390" y="246" width="152" height="36" rx="18" class="button"/>
+    <text x="466" y="269" text-anchor="middle" class="buttonText">เริ่มเขียน</text>
+    <text x="390" y="314" class="muted small">ต่ออัตโนมัติ</text>
+  </g>
+
+  <!-- 4 Prompt: 640x360 -->
+  <g transform="translate(720 540)">
+    <rect width="640" height="360" rx="22" class="card" filter="url(#shadow)"/>
+    <text x="24" y="32" class="ink scene">04 · WRITE PROMPT</text>
+    <text x="24" y="62" class="muted small">เขียน Prompt แบบอิสระ</text>
+    <rect x="24" y="82" width="126" height="104" rx="13" fill="url(#sky)"/>
+    <circle cx="120" cy="112" r="16" fill="#f5c66c"/>
+    <path d="M24 171 L68 128 L100 158 L127 137 L150 171 Z" fill="#416b68"/>
+    <text x="24" y="215" class="muted small">ภาพอ้างอิงขนาดเล็ก</text>
+    <rect x="174" y="82" width="442" height="132" rx="15" fill="#ffffff" stroke="#b9c1ce" stroke-width="3"/>
+    <text x="198" y="119" class="muted body">พิมพ์ Prompt ของคุณ...</text>
+    <text x="198" y="156" class="muted small">ใช้คำของคุณเอง ไม่มีตัวช่วยคำศัพท์</text>
+    <rect x="174" y="242" width="180" height="38" rx="19" class="button"/>
+    <text x="264" y="267" text-anchor="middle" class="buttonText">ส่ง Prompt</text>
+    <text x="390" y="267" class="ink label">เวลานับถอยหลัง</text>
+    <rect x="174" y="306" width="442" height="8" rx="4" fill="#e5e5df"/>
+    <rect x="174" y="306" width="265" height="8" rx="4" fill="#79d7d2"/>
+  </g>
+
+  <!-- 5 Generating: 640x360 -->
+  <g transform="translate(40 940)">
+    <rect width="640" height="360" rx="22" class="card" filter="url(#shadow)"/>
+    <text x="24" y="32" class="ink scene">05 · GENERATING</text>
+    <rect x="24" y="52" width="592" height="280" rx="16" fill="#17203d"/>
+    <circle cx="320" cy="160" r="48" fill="none" stroke="#79d7d2" stroke-width="8" stroke-dasharray="78 26"/>
+    <circle cx="320" cy="160" r="16" fill="#f5a54a"/>
+    <path d="M320 125 L327 149 L352 151 L332 166 L338 191 L320 177 L302 191 L308 166 L288 151 L313 149 Z" fill="#fff8e9"/>
+    <text x="320" y="238" text-anchor="middle" class="title" font-size="23" font-weight="800">AI กำลังสร้างภาพ...</text>
+    <text x="320" y="270" text-anchor="middle" class="title" font-size="16" opacity=".7">เมื่อพร้อม จะแสดงภาพ 5 วินาที</text>
+  </g>
+
+  <!-- 6 Result: 640x360 -->
+  <g transform="translate(720 940)">
+    <rect width="640" height="360" rx="22" class="card" filter="url(#shadow)"/>
+    <text x="24" y="32" class="ink scene">06 · RESULT / FEEDBACK</text>
+    <rect x="24" y="58" width="190" height="128" rx="13" fill="url(#sky)"/>
+    <circle cx="170" cy="91" r="19" fill="#f5c66c"/>
+    <path d="M24 186 L85 130 L122 164 L160 138 L214 186 Z" fill="#416b68"/>
+    <rect x="232" y="58" width="190" height="128" rx="13" fill="url(#result)"/>
+    <circle cx="360" cy="91" r="18" fill="#ffe2a6"/>
+    <path d="M232 186 L291 144 L326 165 L365 128 L422 186 Z" fill="#7f4f55" opacity=".75"/>
+    <circle cx="530" cy="120" r="48" fill="#f5a54a"/>
+    <text x="530" y="112" text-anchor="middle" class="ink small" font-weight="800">คะแนน</text>
+    <text x="530" y="143" text-anchor="middle" class="ink" font-size="28" font-weight="900">82</text>
+    <text x="24" y="224" class="ink" font-size="22" font-weight="900">เก่งมาก!</text>
+    <rect x="24" y="242" width="190" height="32" rx="16" fill="#d8f0e7"/>
+    <text x="119" y="263" text-anchor="middle" class="ink small" font-weight="700">บอกสีได้ชัดเจน</text>
+    <rect x="228" y="242" width="190" height="32" rx="16" fill="#ffe5bd"/>
+    <text x="323" y="263" text-anchor="middle" class="ink small" font-weight="700">เพิ่มบรรยากาศได้อีก</text>
+    <rect x="438" y="242" width="178" height="38" rx="19" class="button"/>
+    <text x="527" y="266" text-anchor="middle" class="buttonText">ดู Leaderboard</text>
+    <text x="527" y="307" text-anchor="middle" class="muted small">ต่ออัตโนมัติ</text>
+  </g>
+
+  <!-- 7 Leaderboard: 640x360 -->
+  <g transform="translate(40 1340)">
+    <rect width="640" height="360" rx="22" class="card" filter="url(#shadow)"/>
+    <text x="24" y="32" class="ink scene">07 · LEADERBOARD</text>
+    <text x="24" y="61" class="ink" font-size="20" font-weight="800">กลุ่ม ป.4 – ป.6</text>
+    <g transform="translate(24 77)">
+      <rect width="592" height="46" rx="11" fill="#f5c66c"/>
+      <text x="15" y="29" class="ink label">01</text><text x="62" y="29" class="ink body">น้องฟ้า</text><rect x="190" y="7" width="66" height="32" rx="7" fill="url(#result)"/><text x="223" y="29" text-anchor="middle" class="title small">ภาพ</text><text x="302" y="29" class="ink small">“ภาพภูเขาสี...”</text><text x="555" y="29" class="ink label">94</text>
+      <rect y="56" width="592" height="46" rx="11" fill="#d8e8b0"/>
+      <text x="15" y="85" class="ink label">02</text><text x="62" y="85" class="ink body">น้องต้น</text><rect x="190" y="63" width="66" height="32" rx="7" fill="url(#result)"/><text x="223" y="85" text-anchor="middle" class="title small">ภาพ</text><text x="302" y="85" class="ink small">“ท้องฟ้ากว้าง...”</text><text x="555" y="85" class="ink label">88</text>
+      <rect y="112" width="592" height="46" rx="11" fill="#79d7d2"/>
+      <text x="15" y="141" class="ink label">03</text><text x="62" y="141" class="ink body">คุณ</text><rect x="190" y="119" width="66" height="32" rx="7" fill="url(#result)"/><text x="223" y="141" text-anchor="middle" class="title small">ภาพ</text><text x="302" y="141" class="ink small">“ภูเขา มีแสง...”</text><text x="555" y="141" class="ink label">82</text>
+    </g>
+    <text x="24" y="277" class="muted small">แสดงอันดับ ชื่อ คะแนน ภาพ และ Prompt เต็ม</text>
+    <rect x="430" y="302" width="186" height="36" rx="18" class="button"/>
+    <text x="523" y="325" text-anchor="middle" class="buttonText">กลับหน้าเริ่ม</text>
+    <text x="330" y="325" text-anchor="middle" class="muted small">กลับอัตโนมัติ</text>
+  </g>
+
+  <text x="1050" y="1525" class="title" font-size="21" font-weight="800">7 scenes</text>
+  <text x="1050" y="1560" class="title" font-size="17" opacity=".78">one clear purpose per page</text>
+  <text x="1050" y="1596" class="title" font-size="17" opacity=".78">content frame: 16:9</text>
+  <text x="700" y="1760" text-anchor="middle" class="title" font-size="16" opacity=".65">Concept draft v2 · visual alignment only · no application implementation</text>
+</svg>
