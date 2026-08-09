@@ -47,6 +47,7 @@ discoveries, patterns, problems, and next-step context.
 | `scoring>same-formula-level-specific-challenges` | 2026-08-08T01:29:21+07:00 |
 | `scoring>concept-doc-50-50-0-to-100` | 2026-08-08T01:38:42+07:00 |
 | `scoring>same-internal-weights-core-first-no-length` | 2026-08-09T15:50:12+07:00 |
+| `delivery>challenge-catalog-pushed-1a227eb` | 2026-08-09T16:05:43+07:00 |
 | `next>challenge-content-difficulty-criteria-before-implementation` | 2026-08-08T02:46:28+07:00 |
 | `content>fun-first-science-hidden-20-age-tailored-images` | 2026-08-08T10:45:59+07:00 |
 | `workflow>challenge-briefs-one-by-one-review-before-generation` | 2026-08-08T10:47:42+07:00 |
