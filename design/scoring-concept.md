@@ -25,6 +25,35 @@ imperfect.
 different visible score scales or formulas.
 - Leaderboards show only players in the current school-level group.
 
+### Prompt Quality
+
+Every level uses the same internal prompt-quality weighting:
+
+- **40% clarity:** the subject and action are understandable.
+- **30% specificity:** concrete words provide useful visual control.
+- **20% relationship:** important subject, action, or scene relationships are
+  communicated.
+- **10% consistency:** the instructions do not contradict each other.
+
+Prompt length is not a scoring criterion. A short, clear prompt can score very
+highly, especially for ป.1–ป.3. Older levels use more complex challenge anchors
+and relationships rather than a different prompt-quality formula.
+
+### Generated-image Match
+
+Every level uses the same internal image-match weighting:
+
+- **70% core concept:** the challenge’s main characters, actions, and
+  relationships.
+- **20% supporting details:** optional colors, props, setting details, or
+  atmosphere.
+- **10% scene coherence:** the generated image remains one readable scene with
+  a compatible overall mood and composition.
+
+Each modular challenge defines its core anchors and optional details in its
+`challenge.md`. Core anchors matter most; optional details add precision but do
+not replace the main concept.
+
 ## Result Feedback
 
 Result / Feedback shows the single numeric score with two or three concise
@@ -42,11 +71,10 @@ well or what it missed without becoming a long lesson or detailed analysis.
 
 ## Open Decisions
 
-The following remain open until scoring design continues:
+The following remain open until scoring implementation continues:
 
-- The exact prompt-quality criteria
-- The exact image-match criteria
-- How challenge-specific criteria are represented
+- How challenge brief anchors are transformed into validated runtime scoring
+  inputs
 - Empty-prompt and incomplete-result handling
 - Tie-breaking rules
 - Image-generation failure behavior

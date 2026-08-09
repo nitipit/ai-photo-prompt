@@ -46,3 +46,16 @@ discoveries, patterns, problems, and next-step context.
 | `scoring>numeric-0-to-100` | 2026-08-08T01:28:41+07:00 |
 | `scoring>same-formula-level-specific-challenges` | 2026-08-08T01:29:21+07:00 |
 | `scoring>concept-doc-50-50-0-to-100` | 2026-08-08T01:38:42+07:00 |
+| `scoring>same-internal-weights-core-first-no-length` | 2026-08-09T15:50:12+07:00 |
+| `next>challenge-content-difficulty-criteria-before-implementation` | 2026-08-08T02:46:28+07:00 |
+| `content>fun-first-science-hidden-20-age-tailored-images` | 2026-08-08T10:45:59+07:00 |
+| `workflow>challenge-briefs-one-by-one-review-before-generation` | 2026-08-08T10:47:42+07:00 |
+| `content>p1-p3-01-keep-pilot-tune-scoring-later` | 2026-08-08T12:43:33+07:00 |
+| `content>p1-p3-five-targets-approved-review-first` | 2026-08-08T13:49:34+07:00 |
+| `structure>modular-challenge-bundles-md-target-runtime` | 2026-08-08T14:01:17+07:00 |
+| `next>p4-p6-03-rain-to-balloons-brief-review` | 2026-08-08T14:14:08+07:00 |
+| `workflow>approved-bundle-requires-md-and-target-verify` | 2026-08-09T11:41:19+07:00 |
+| `content>p4-p6-five-targets-approved-modular` | 2026-08-09T11:52:09+07:00 |
+| `content>m1-m3-five-targets-approved-modular` | 2026-08-09T13:19:11+07:00 |
+| `content>m4-m6-five-targets-approved-modular` | 2026-08-09T14:44:29+07:00 |
+| `metadata>challenge-frontmatter-id-title-level-status-target` | 2026-08-09T15:25:53+07:00 |
