@@ -9,6 +9,7 @@ from app.domain.models import (
     ChallengeSpec,
     GameState,
     ImageArtifact,
+    LeaderboardEntry,
     PipelineResult,
     PipelineResultStatus,
     RoundRecord,
@@ -48,6 +49,28 @@ def test_challenge_spec_is_strict_and_reconstructs_enum_values() -> None:
         ChallengeSpec({**challenge_data(), "level": "primary"})
     with pytest.raises(Model.Error):
         ChallengeSpec({**challenge_data(), "target_asset_url": "/tmp/target.webp"})
+
+
+def test_leaderboard_entry_requires_round_identity_and_current_marker() -> None:
+    entry = LeaderboardEntry(
+        round_id=str(uuid4()),
+        is_current=True,
+        rank=1,
+        name="Tester",
+        score=96,
+        generated_image={"url": "/generated/image.webp"},
+        prompt="full prompt",
+    )
+
+    assert entry.dict()["is_current"] is True
+    with pytest.raises(Model.Error):
+        LeaderboardEntry(
+            rank=1,
+            name="Tester",
+            score=96,
+            generated_image={"url": "/generated/image.webp"},
+            prompt="full prompt",
+        )
 
 
 def test_round_record_serializes_nested_records_to_messagepack_values(

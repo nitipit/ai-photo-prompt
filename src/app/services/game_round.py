@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from math import isfinite
 from typing import Protocol
@@ -26,6 +27,7 @@ from app.domain.models import (
     ChallengeStatus,
     FailureDetail,
     GameState,
+    LeaderboardEntry,
     LevelGroup,
     PipelineResultStatus,
     PromptSubmissionReason,
@@ -57,6 +59,14 @@ ChallengeSelector = Callable[[tuple[ChallengeSpec, ...]], ChallengeSpec]
 UtcClock = Callable[[], datetime]
 
 
+@dataclass(frozen=True)
+class LeaderboardProjection:
+    """Immutable completed-round leaderboard entries and the current rank."""
+
+    entries: tuple[LeaderboardEntry, ...]
+    current_rank: int
+
+
 class AIPipelineRunner(Protocol):
     """Async runner compatible with the local fake pipeline boundary."""
 
@@ -70,6 +80,7 @@ class AIPipelineRunner(Protocol):
 
 _PROMPT_DEADLINE = timedelta(seconds=90)
 _REVEAL_DURATION = timedelta(seconds=5)
+_LEADERBOARD_DURATION = timedelta(seconds=15)
 _DEFAULT_CLAIM_LEASE = timedelta(seconds=30)
 _DEFAULT_PROVIDER_TIMEOUT = 10.0
 _PROVIDER_TIMEOUT_CODE = "provider_timeout"
@@ -318,6 +329,125 @@ class GameRoundService:
 
         return await self._get_record(round_id)
 
+    async def show_result(self, round_id: str) -> RoundRecord:
+        """Authorize the generated reveal timeout and persist the Result scene."""
+
+        record = await self._get_record(round_id)
+        self._require_state(record, GameState.GENERATED_REVEAL, "show result")
+        if record.terminal_disposition is not None:
+            raise GameRoundConflictError("generated reveal round is terminal")
+        self._require_result_context(record)
+        timestamp = self._timestamp()
+        self._require_elapsed_reveal_deadline(record, timestamp)
+
+        machine = RoundStateMachine.from_record(record)
+        self._transition(
+            machine,
+            lambda: machine.reveal_elapsed(deadline_elapsed=True),
+            "reveal_elapsed",
+        )
+        replacement = self._replacement(
+            record,
+            state=machine.state_value,
+            updated_at=timestamp,
+        )
+        await asyncio.to_thread(self._repository.replace, replacement)
+        return replacement
+
+    async def complete_round(self, round_id: str) -> RoundRecord:
+        """Persist a complete Result as terminal completed leaderboard history."""
+
+        record = await self._get_record(round_id)
+        self._require_state(record, GameState.RESULT, "complete round")
+        if record.terminal_disposition is not None:
+            raise GameRoundConflictError("result round is terminal")
+        self._require_result_context(record)
+        if record.level is None:
+            raise GameRoundValidationError("result round is missing level")
+        if record.prompt is None or not record.prompt.strip():
+            raise GameRoundValidationError("result round is missing prompt")
+
+        machine = RoundStateMachine.from_record(record)
+        self._transition(
+            machine,
+            lambda: machine.show_leaderboard(completed=True),
+            "show_leaderboard",
+        )
+        timestamp = self._timestamp()
+        replacement = self._replacement(
+            record,
+            state=machine.state_value,
+            terminal_disposition=TerminalDisposition.COMPLETED,
+            completed_at=timestamp,
+            updated_at=timestamp,
+            leaderboard_deadline=(self._as_datetime(timestamp) + _LEADERBOARD_DURATION).isoformat(),
+        )
+        await asyncio.to_thread(self._repository.replace, replacement)
+        return replacement
+
+    async def get_leaderboard(self, round_id: str) -> LeaderboardProjection:
+        """Project the current completed round into its level's ranked history."""
+
+        current = await self._get_record(round_id)
+        self._require_state(current, GameState.LEADERBOARD, "get leaderboard")
+        if current.terminal_disposition is not TerminalDisposition.COMPLETED:
+            raise GameRoundConflictError("leaderboard round is not completed")
+        if current.level is None:
+            raise GameRoundValidationError("completed round is missing level")
+        self._validate_completed_row(current, current.level)
+
+        try:
+            completed = await asyncio.to_thread(
+                self._repository.list_completed,
+                current.level,
+            )
+        except ValueError as error:
+            raise GameRoundValidationError("stored leaderboard row is invalid") from error
+        rows = [self._validate_completed_row(row, current.level) for row in completed]
+        current_rows = [row for row in rows if row.id == current.id]
+        if len(current_rows) != 1:
+            raise GameRoundValidationError(
+                "current completed round must appear exactly once in leaderboard"
+            )
+
+        ordered = sorted(
+            rows,
+            key=lambda row: (
+                -self._visible_score(row),
+                row.completed_at or "",
+                row.id,
+            ),
+        )
+        entries: list[LeaderboardEntry] = []
+        current_rank: int | None = None
+        previous_rank = 0
+        previous_score: int | float | None = None
+        for index, row in enumerate(ordered):
+            if row.generated_artifact is None or row.prompt is None:
+                raise GameRoundValidationError("completed leaderboard row is incomplete")
+            score = self._visible_score(row)
+            rank = 1 if index == 0 else previous_rank if score == previous_score else index + 1
+            entry = LeaderboardEntry(
+                round_id=row.id,
+                is_current=row.id == current.id,
+                rank=rank,
+                name=row.display_name,
+                score=score,
+                generated_image=row.generated_artifact,
+                prompt=row.prompt,
+            )
+            entries.append(entry)
+            if row.id == current.id:
+                current_rank = rank
+            previous_rank = rank
+            previous_score = score
+
+        if current_rank is None:
+            raise GameRoundValidationError(
+                "current completed round must appear exactly once in leaderboard"
+            )
+        return LeaderboardProjection(tuple(entries), current_rank)
+
     async def _persist_generation_success(
         self,
         record: RoundRecord,
@@ -431,6 +561,68 @@ class GameRoundService:
         return challenge, record.prompt
 
     @staticmethod
+    def _require_state(record: RoundRecord, expected: GameState, event: str) -> None:
+        if record.state is not expected:
+            raise GameRoundConflictError(f"cannot {event} from {record.state.value}")
+
+    @staticmethod
+    def _require_result_context(record: RoundRecord) -> None:
+        if any(
+            value is None
+            for value in (
+                record.generated_artifact,
+                record.prompt_evaluation,
+                record.image_evaluation,
+                record.score,
+            )
+        ):
+            raise GameRoundValidationError("round is missing complete result data")
+        if len(record.feedback) not in (2, 3) or any(
+            not feedback.strip() for feedback in record.feedback
+        ):
+            raise GameRoundValidationError("round is missing complete feedback")
+        if record.pipeline_failure is not None:
+            raise GameRoundValidationError("round has an unexpected pipeline failure")
+
+    @classmethod
+    def _require_elapsed_reveal_deadline(cls, record: RoundRecord, current: str) -> None:
+        if record.reveal_deadline is None:
+            raise GameRoundDeadlineError("round has no reveal deadline")
+        if cls._as_datetime(current) < cls._as_datetime(record.reveal_deadline):
+            raise GameRoundDeadlineError("reveal deadline has not elapsed")
+
+    @classmethod
+    def _validate_completed_row(
+        cls,
+        record: RoundRecord,
+        level: LevelGroup,
+    ) -> RoundRecord:
+        if not isinstance(record, RoundRecord):
+            raise GameRoundValidationError("completed leaderboard row is invalid")
+        if record.state is not GameState.LEADERBOARD:
+            raise GameRoundValidationError("completed leaderboard row has invalid state")
+        if record.terminal_disposition is not TerminalDisposition.COMPLETED:
+            raise GameRoundValidationError("completed leaderboard row has invalid disposition")
+        if record.level is not level:
+            raise GameRoundValidationError("completed leaderboard row has invalid level")
+        if not record.display_name.strip():
+            raise GameRoundValidationError("completed leaderboard row is missing display name")
+        if record.prompt is None or not record.prompt.strip():
+            raise GameRoundValidationError("completed leaderboard row is missing prompt")
+        if record.completed_at is None or record.leaderboard_deadline is None:
+            raise GameRoundValidationError("completed leaderboard row is missing timestamps")
+        cls._as_datetime(record.completed_at)
+        cls._as_datetime(record.leaderboard_deadline)
+        cls._require_result_context(record)
+        return record
+
+    @staticmethod
+    def _visible_score(record: RoundRecord) -> int | float:
+        if record.score is None:
+            raise GameRoundValidationError("completed leaderboard row is missing score")
+        return record.score.total_score
+
+    @staticmethod
     def _validate_generation_timing(
         claim_lease_duration: timedelta,
         provider_timeout: float,
@@ -450,7 +642,13 @@ class GameRoundService:
             )
 
     async def _get_record(self, round_id: str) -> RoundRecord:
-        return await asyncio.to_thread(self._repository.get, round_id)
+        try:
+            record = await asyncio.to_thread(self._repository.get, round_id)
+        except ValueError as error:
+            raise GameRoundValidationError("stored round is invalid") from error
+        if not isinstance(record, RoundRecord):
+            raise GameRoundValidationError("stored round is invalid")
+        return record
 
     @staticmethod
     def _replacement(record: RoundRecord, **changes: object) -> RoundRecord:
@@ -538,7 +736,13 @@ class GameRoundService:
     @staticmethod
     def _as_datetime(timestamp: str) -> datetime:
         candidate = timestamp[:-1] + "+00:00" if timestamp.endswith("Z") else timestamp
-        return datetime.fromisoformat(candidate).astimezone(UTC)
+        try:
+            parsed = datetime.fromisoformat(candidate)
+        except (TypeError, ValueError, OverflowError) as error:
+            raise GameRoundValidationError("round contains a malformed timestamp") from error
+        if parsed.tzinfo is None or parsed.utcoffset() is None:
+            raise GameRoundValidationError("round contains a timestamp without timezone")
+        return parsed.astimezone(UTC)
 
     @classmethod
     def _require_elapsed_prompt_deadline(cls, record: RoundRecord, current: str) -> None:
@@ -554,6 +758,7 @@ __all__ = [
     "GameRoundConflictError",
     "GameRoundDeadlineError",
     "GameRoundService",
+    "LeaderboardProjection",
     "GameRoundValidationError",
     "UtcClock",
 ]

@@ -346,6 +346,8 @@ class PipelineResult(_StrictModel):
 class LeaderboardEntry(_StrictModel):
     """A completed round projection suitable for leaderboard rendering."""
 
+    round_id = Field(required=True).func(_uuid_string)
+    is_current = Field(required=True).func(_strict_bool)
     rank = Field(required=True).func(_non_negative_int)
     name = Field(required=True).func(_text)
     score = Field(required=True).func(_score)
