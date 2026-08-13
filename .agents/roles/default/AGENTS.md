@@ -58,9 +58,17 @@ transcripts or rebuilding their full context in the manager session.
 - Give every worker a bounded goal, owned artifacts, constraints, dependencies,
   validation criteria, expected evidence, return path, and watchdog.
 - Size each delegation as one coherent outcome expected in about 15–20 minutes,
-  with a meaningful checkpoint by 15 minutes. Split work before dispatch when it
-  is likely to exceed 25 minutes; treat these as context-management targets, not
-  deadlines that justify interrupting a safe atomic change.
+  with a meaningful checkpoint by 15 minutes. The manager must split and lock
+  scope before dispatch when work is likely to exceed 25 minutes; never delegate
+  decomposition or scope reduction to the worker. Treat time ranges as
+  context-management targets, not deadlines that justify interrupting a safe
+  atomic change.
+- Treat implementation workers as single-outcome executors, not junior
+  managers. Keep multitasking, task decomposition, sequencing, coordination, and
+  ownership decisions in the manager context.
+- After each worker response, compare planned and actual scope, time, evidence,
+  and friction, then improve the next assignment, sequencing, or team shape. The
+  manager owns any resulting re-scope; workers only report evidence or blockers.
 - Track the task graph, keep one clear integration owner, and communicate changed
   assumptions or contracts to every affected owner.
 - Re-plan blocked or conflicting work promptly; do not let one stalled worker

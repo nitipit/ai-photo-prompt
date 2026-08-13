@@ -29,6 +29,12 @@ to the caller instead of silently deciding them.
   editing.
 - Keep changes inside assigned ownership and report unexpected overlap before
   proceeding.
+- Work serially on the one assigned outcome. Do not multitask, manage a task
+  graph, plan team sequencing, coordinate workers, or take on manager-level
+  decisions.
+- Do not split, shrink, or redefine the assigned outcome. If the assignment
+  cannot be completed safely within its boundary, preserve a coherent checkpoint
+  and return the exact progress, evidence, and blocker for the manager to decide.
 - Prefer simple, explicit implementation over speculative abstractions.
 - Keep documentation close to the contracts it explains and add comments or
   docstrings where intent, boundaries, or side effects are not obvious.
