@@ -1,0 +1,154 @@
+from __future__ import annotations
+
+from datetime import UTC, datetime
+from pathlib import Path
+from uuid import uuid4
+
+import pytest
+from shelfdb.shelf import DB  # type: ignore[import-untyped]
+
+from app.domain.models import GameState, LevelGroup, RoundRecord, TerminalDisposition
+from app.persistence import RoundConflictError, RoundNotFoundError, ShelfDbRoundRepository
+
+FIXED_TIMESTAMP = datetime(2026, 1, 1, tzinfo=UTC).isoformat()
+
+
+def make_round(
+    *,
+    level: LevelGroup | None = None,
+    disposition: TerminalDisposition | None = None,
+    completed_at: str | None = None,
+) -> RoundRecord:
+    return RoundRecord(
+        id=str(uuid4()),
+        state=(
+            GameState.LEADERBOARD
+            if disposition is TerminalDisposition.COMPLETED
+            else GameState.ABANDONED
+            if disposition is TerminalDisposition.ABANDONED
+            else GameState.LEVEL_SELECTION
+        ),
+        display_name="Tester",
+        level=level,
+        terminal_disposition=disposition,
+        created_at=FIXED_TIMESTAMP,
+        updated_at=FIXED_TIMESTAMP,
+        completed_at=completed_at,
+    )
+
+
+@pytest.fixture
+def repository(tmp_path: Path):
+    db = DB(str(tmp_path / "rounds-db"))
+    try:
+        yield ShelfDbRoundRepository(db)
+    finally:
+        db.close()
+
+
+def test_round_mapping_round_trip_is_strict(repository: ShelfDbRoundRepository) -> None:
+    record = make_round(level=LevelGroup.P1_P3)
+
+    repository.create(record)
+    rebuilt = repository.get(record.id)
+
+    assert rebuilt is not record
+    assert rebuilt.dict() == record.dict()
+    assert rebuilt.level is LevelGroup.P1_P3
+
+
+def test_duplicate_create_and_missing_operations_raise_focused_errors(
+    repository: ShelfDbRoundRepository,
+) -> None:
+    record = make_round()
+    repository.create(record)
+
+    with pytest.raises(RoundConflictError):
+        repository.create(record)
+    with pytest.raises(RoundNotFoundError):
+        repository.get(str(uuid4()))
+    with pytest.raises(RoundNotFoundError):
+        repository.replace(make_round())
+
+
+def test_replace_is_a_full_replacement(repository: ShelfDbRoundRepository) -> None:
+    original = make_round(level=LevelGroup.P1_P3)
+    repository.create(original)
+    replacement = RoundRecord(
+        **{
+            **original.dict(),
+            "state": GameState.PROMPT_ENTRY,
+            "display_name": "Replaced",
+            "level": LevelGroup.M4_M6,
+        }
+    )
+
+    repository.replace(replacement)
+
+    assert repository.get(original.id).dict() == replacement.dict()
+
+
+def test_completed_listing_filters_level_and_orders_by_completion_then_id(
+    repository: ShelfDbRoundRepository,
+) -> None:
+    first = make_round(
+        level=LevelGroup.P1_P3,
+        disposition=TerminalDisposition.COMPLETED,
+        completed_at="2026-01-01T00:00:01+00:00",
+    )
+    second = make_round(
+        level=LevelGroup.P1_P3,
+        disposition=TerminalDisposition.COMPLETED,
+        completed_at=first.completed_at,
+    )
+    third = make_round(
+        level=LevelGroup.M4_M6,
+        disposition=TerminalDisposition.COMPLETED,
+        completed_at="2026-01-01T00:00:00+00:00",
+    )
+    abandoned = make_round(
+        level=LevelGroup.P1_P3,
+        disposition=TerminalDisposition.ABANDONED,
+        completed_at="2025-01-01T00:00:00+00:00",
+    )
+    in_progress = make_round(level=LevelGroup.P1_P3)
+    for record in (first, second, third, abandoned, in_progress):
+        repository.create(record)
+
+    all_completed = repository.list_completed()
+
+    assert [record.id for record in all_completed] == [
+        third.id,
+        *sorted((first.id, second.id)),
+    ]
+    assert repository.list_completed(LevelGroup.P1_P3) == sorted(
+        [first, second], key=lambda record: (record.completed_at or "", record.id)
+    )
+
+
+def test_failed_transaction_rolls_back_create(repository: ShelfDbRoundRepository) -> None:
+    record = make_round()
+
+    with pytest.raises(RoundConflictError):
+        with repository._db.transaction(write=True) as transaction:  # noqa: SLF001
+            transaction.shelf("rounds").put(record.id, record.dict())
+            raise RoundConflictError("forced rollback")
+
+    with pytest.raises(RoundNotFoundError):
+        repository.get(record.id)
+
+
+def test_rounds_survive_close_and_reopen(tmp_path: Path) -> None:
+    path = str(tmp_path / "durable-rounds")
+    record = make_round()
+    first_db = DB(path)
+    try:
+        ShelfDbRoundRepository(first_db).create(record)
+    finally:
+        first_db.close()
+
+    second_db = DB(path)
+    try:
+        assert ShelfDbRoundRepository(second_db).get(record.id).dict() == record.dict()
+    finally:
+        second_db.close()
