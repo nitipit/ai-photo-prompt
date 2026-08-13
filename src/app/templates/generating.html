@@ -1,0 +1,132 @@
+{% extends "_base.html" %} {% block title %}กำลังสร้างภาพ | Photo Prompt{%
+endblock %} {% block content %}
+<main
+  class="scene generating-scene"
+  data-scene="generating"
+  data-generating-state="{% if failure %}failure{% else %}success{% endif %}"
+>
+  <header class="scene-topbar">
+    <a class="brand" href="/" aria-label="กลับหน้าพร้อมเล่น">
+      <span class="brand-mark" aria-hidden="true">✦</span>
+      <span class="brand-name">PHOTO <strong>PROMPT</strong></span>
+    </a>
+    <p class="scene-tag">กำลังสร้างภาพ</p>
+  </header>
+
+  {% if failure %}
+  <div class="generating-layout generating-failure-layout">
+    <section
+      class="generating-status"
+      aria-labelledby="generating-failure-title"
+    >
+      <p class="eyebrow">เกิดข้อผิดพลาดชั่วคราว</p>
+      <h1 id="generating-failure-title">
+        สร้างภาพยังไม่สำเร็จ<br /><span>ลองอีกครั้งได้เลย</span>
+      </h1>
+      <p class="generating-status-message">
+        คำสั่งของคุณยังอยู่ครบ ไม่ต้องเริ่มใหม่
+      </p>
+    </section>
+
+    <section class="generating-hero" aria-label="สถานะการสร้างภาพ">
+      <div class="failure-card" role="alert">
+        <span class="failure-mark" aria-hidden="true">!</span>
+        <div>
+          <strong>ภาพยังไม่พร้อมในครั้งนี้</strong>
+          <p>ลองสร้างใหม่อีกครั้ง หรือออกจากรอบเพื่อกลับไปหน้าพร้อมเล่น</p>
+        </div>
+      </div>
+    </section>
+
+    <div class="generating-bottom-action generating-failure-actions">
+      <form action="/rounds/{{ round_id }}/generating/retry" method="post">
+        <input type="hidden" name="challenge_id" value="{{ challenge.id }}" />
+        <input type="hidden" name="prompt" value="{{ prompt }}" />
+        <kiosk-button>
+          <button id="retry-generating-button" type="submit">
+            ลองอีกครั้ง <span aria-hidden="true">↻</span>
+          </button>
+        </kiosk-button>
+      </form>
+      <form action="/rounds/{{ round_id }}/generating/exit" method="post">
+        <input type="hidden" name="challenge_id" value="{{ challenge.id }}" />
+        <input type="hidden" name="prompt" value="{{ prompt }}" />
+        <button
+          class="secondary-button"
+          id="exit-generating-button"
+          type="submit"
+        >
+          ออกจากรอบ
+        </button>
+      </form>
+    </div>
+  </div>
+  {% else %}
+  <div class="generating-layout">
+    <section class="generating-status" aria-labelledby="generating-title">
+      <p class="eyebrow">ภาพของคุณกำลังมา</p>
+      <h1 id="generating-title">
+        กำลังสร้างภาพ<br /><span>อีกนิดเดียวก็พร้อมแล้ว</span>
+      </h1>
+      <p
+        id="generating-status-message"
+        class="generating-status-message"
+        role="status"
+        aria-live="polite"
+      >
+        กำลังเตรียมภาพตัวอย่าง...
+      </p>
+    </section>
+
+    <section class="generating-hero" aria-label="ภาพที่กำลังสร้าง">
+      <div class="generating-frame">
+        <div
+          id="generating-loader"
+          class="generating-loader"
+          aria-hidden="true"
+        >
+          <span class="generating-spinner"></span>
+          <p>กำลังประมวลผล</p>
+        </div>
+        <!-- Explicit fake generated placeholder for this temporary seam; not provider output. -->
+        <img
+          id="generating-image"
+          class="generating-image"
+          src="{{ challenge.target_asset_url }}"
+          alt="ภาพตัวอย่างที่สร้างจากโจทย์นี้"
+          data-fake-generated-placeholder="true"
+          data-placeholder-source="selected-target-asset"
+          hidden
+        />
+        <span
+          id="generating-placeholder-badge"
+          class="generating-placeholder-badge"
+          hidden
+        >
+          ภาพตัวอย่างชั่วคราว
+        </span>
+      </div>
+    </section>
+
+    <div class="generating-bottom-action">
+      <p id="generating-next-message">ระบบจะพาไปต่ออัตโนมัติเมื่อภาพพร้อม</p>
+      <form
+        id="generating-continue-form"
+        action="/rounds/{{ round_id }}/generating/continue"
+        method="post"
+      >
+        <input type="hidden" name="challenge_id" value="{{ challenge.id }}" />
+        <input type="hidden" name="prompt" value="{{ prompt }}" />
+        <kiosk-button>
+          <button id="continue-generating-button" type="submit" hidden>
+            ไปต่อ <span aria-hidden="true">→</span>
+          </button>
+        </kiosk-button>
+      </form>
+    </div>
+  </div>
+  {% endif %}
+</main>
+{% endblock %} {% block page_script %}
+<script type="module" src="/templates/generating.js"></script>
+{% endblock %}

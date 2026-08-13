@@ -1,3 +1,5 @@
+from urllib.parse import parse_qs, urlsplit
+
 from fastapi.testclient import TestClient
 
 from app.server import app
@@ -70,7 +72,8 @@ def test_level_post_reveals_sorted_challenge_and_serves_target_asset() -> None:
         assert "Rabbit chef and giant pancake" not in prompt.text
 
 
-def test_prompt_submission_seams_validate_reason_and_content() -> None:
+def test_prompt_submission_redirects_to_encoded_generating_scene() -> None:
+    prompt = "กระต่ายเชฟ & สีฟ้า + 50%"
     with TestClient(app) as client:
         blank_manual = client.post(
             "/rounds/demo/prompt",
@@ -98,22 +101,32 @@ def test_prompt_submission_seams_validate_reason_and_content() -> None:
             "/rounds/demo/prompt",
             data={
                 "challenge_id": "p1-p3-01",
-                "prompt": "กระต่ายเชฟทำแพนเค้กยักษ์",
+                "prompt": prompt,
                 "submission_reason": "manual",
             },
+            follow_redirects=False,
         )
-        assert valid_manual.status_code == 501
-        assert "Generating scene is not implemented" in valid_manual.json()["detail"]
+        assert valid_manual.status_code == 303
+        location = urlsplit(valid_manual.headers["location"])
+        assert location.path == "/rounds/demo/generating"
+        assert parse_qs(location.query) == {
+            "challenge_id": ["p1-p3-01"],
+            "prompt": [prompt],
+        }
+        assert "+" in location.query
+        assert "%" in location.query
 
         valid_timeout = client.post(
             "/rounds/demo/prompt",
             data={
                 "challenge_id": "p1-p3-01",
-                "prompt": "กระต่ายเชฟทำแพนเค้กยักษ์",
+                "prompt": prompt,
                 "submission_reason": "timeout",
             },
+            follow_redirects=False,
         )
-        assert valid_timeout.status_code == 501
+        assert valid_timeout.status_code == 303
+        assert urlsplit(valid_timeout.headers["location"]).path == "/rounds/demo/generating"
 
         too_long = client.post(
             "/rounds/demo/prompt",
@@ -126,10 +139,90 @@ def test_prompt_submission_seams_validate_reason_and_content() -> None:
         assert too_long.status_code == 422
 
 
+def test_generating_success_renders_the_explicit_fake_placeholder() -> None:
+    with TestClient(app) as client:
+        generating = client.get(
+            "/rounds/demo/generating",
+            params={
+                "challenge_id": "p1-p3-01",
+                "prompt": "กระต่ายเชฟทำแพนเค้กยักษ์",
+            },
+        )
+
+        assert generating.status_code == 200
+        assert 'data-scene="generating"' in generating.text
+        assert 'data-generating-state="success"' in generating.text
+        assert 'data-fake-generated-placeholder="true"' in generating.text
+        assert 'data-placeholder-source="selected-target-asset"' in generating.text
+        assert 'src="/assets/challenges/p1-p3-01.webp"' in generating.text
+        assert 'action="/rounds/demo/generating/continue"' in generating.text
+
+
+def test_generating_failure_retry_preserves_context_and_exit_returns_ready() -> None:
+    prompt = "กระต่ายเชฟทำแพนเค้กยักษ์"
+    with TestClient(app) as client:
+        failure = client.get(
+            "/rounds/demo/generating",
+            params={
+                "challenge_id": "p1-p3-01",
+                "prompt": prompt,
+                "failure": "1",
+            },
+        )
+        assert failure.status_code == 200
+        assert 'data-generating-state="failure"' in failure.text
+        assert 'action="/rounds/demo/generating/retry"' in failure.text
+        assert 'action="/rounds/demo/generating/exit"' in failure.text
+        assert f'value="{prompt}"' in failure.text
+
+        retry = client.post(
+            "/rounds/demo/generating/retry",
+            data={"challenge_id": "p1-p3-01", "prompt": prompt},
+            follow_redirects=False,
+        )
+        assert retry.status_code == 303
+        retry_location = urlsplit(retry.headers["location"])
+        assert retry_location.path == "/rounds/demo/generating"
+        assert parse_qs(retry_location.query) == {
+            "challenge_id": ["p1-p3-01"],
+            "prompt": [prompt],
+        }
+
+        exit_response = client.post(
+            "/rounds/demo/generating/exit",
+            data={"challenge_id": "p1-p3-01", "prompt": prompt},
+            follow_redirects=False,
+        )
+        assert exit_response.status_code == 303
+        assert exit_response.headers["location"] == "/"
+
+
+def test_generating_continue_preserves_the_temporary_result_seam() -> None:
+    with TestClient(app) as client:
+        continue_response = client.post(
+            "/rounds/demo/generating/continue",
+            data={
+                "challenge_id": "p1-p3-01",
+                "prompt": "กระต่ายเชฟทำแพนเค้กยักษ์",
+            },
+        )
+
+        assert continue_response.status_code == 501
+        assert continue_response.json()["detail"] == (
+            "Result scene is not implemented in this temporary seam"
+        )
+
+
 def test_prompt_unknown_challenge_is_not_found() -> None:
     with TestClient(app) as client:
         prompt = client.get("/rounds/demo/prompt?challenge_id=missing")
         assert prompt.status_code == 404
+
+        generating = client.get(
+            "/rounds/demo/generating",
+            params={"challenge_id": "missing", "prompt": "ข้อความ"},
+        )
+        assert generating.status_code == 404
 
         continue_response = client.post(
             "/rounds/demo/challenge/continue",

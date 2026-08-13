@@ -47,3 +47,25 @@ def render_prompt_entry(request: Request, round_id: str, challenge):
         name="prompt.html",
         context={"round_id": round_id, "challenge": challenge},
     )
+
+
+def render_generating(
+    request: Request,
+    round_id: str,
+    challenge,
+    prompt: str,
+    *,
+    failure: bool = False,
+):
+    """Render the temporary progress, reveal, or retry state for one prompt."""
+
+    return templates.TemplateResponse(
+        request=request,
+        name="generating.html",
+        context={
+            "round_id": round_id,
+            "challenge": challenge,
+            "prompt": prompt,
+            "failure": failure,
+        },
+    )

@@ -2,6 +2,7 @@
 
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from urllib.parse import urlencode
 
 from fastapi import FastAPI, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -12,6 +13,7 @@ from .content.repository import CatalogValidationError, ChallengeCatalog
 from .domain.models import LevelGroup, PromptSubmissionReason
 from .web import (
     render_challenge_reveal,
+    render_generating,
     render_level_selection,
     render_prompt_entry,
     render_ready,
@@ -122,7 +124,7 @@ async def submit_demo_prompt(
     prompt: str = Form(default=""),
     submission_reason: str = Form(...),
 ):
-    """Validate prompt input before the deliberately unimplemented Generating seam."""
+    """Validate prompt input before the temporary Generating scene handoff."""
 
     _require_demo_round(round_id)
     _get_challenge(challenge_id)
@@ -138,10 +140,94 @@ async def submit_demo_prompt(
             return RedirectResponse(url="/", status_code=303)
         raise HTTPException(status_code=422, detail="Prompt cannot be blank")
 
+    return RedirectResponse(
+        url=_generating_url(round_id, challenge_id, prompt),
+        status_code=303,
+    )
+
+
+@app.get("/rounds/{round_id}/generating", response_class=HTMLResponse)
+async def generating_scene(
+    request: Request,
+    round_id: str,
+    challenge_id: str,
+    prompt: str,
+    failure: str | None = None,
+):
+    """Render the temporary Generating scene for one validated challenge and prompt."""
+
+    _require_demo_round(round_id)
+    challenge = _get_challenge(challenge_id)
+    _validate_prompt(prompt)
+    return render_generating(
+        request,
+        round_id,
+        challenge,
+        prompt,
+        failure=failure == "1",
+    )
+
+
+@app.post("/rounds/{round_id}/generating/retry", status_code=303)
+async def retry_demo_generation(
+    round_id: str,
+    challenge_id: str = Form(...),
+    prompt: str = Form(...),
+) -> RedirectResponse:
+    """Retry the temporary Generating scene without limiting attempts."""
+
+    _require_demo_round(round_id)
+    _get_challenge(challenge_id)
+    _validate_prompt(prompt)
+    return RedirectResponse(
+        url=_generating_url(round_id, challenge_id, prompt),
+        status_code=303,
+    )
+
+
+@app.post("/rounds/{round_id}/generating/exit", status_code=303)
+async def exit_demo_generation(
+    round_id: str,
+    challenge_id: str = Form(...),
+    prompt: str = Form(...),
+) -> RedirectResponse:
+    """Exit the temporary failure state without creating a result or score."""
+
+    _require_demo_round(round_id)
+    _get_challenge(challenge_id)
+    _validate_prompt(prompt)
+    return RedirectResponse(url="/", status_code=303)
+
+
+@app.post("/rounds/{round_id}/generating/continue")
+async def continue_demo_generation(
+    round_id: str,
+    challenge_id: str = Form(...),
+    prompt: str = Form(...),
+):
+    """Validate the visible reveal before handing off to the future Result scene."""
+
+    _require_demo_round(round_id)
+    _get_challenge(challenge_id)
+    _validate_prompt(prompt)
     raise HTTPException(
         status_code=501,
-        detail="Generating scene is not implemented in this temporary seam",
+        detail="Result scene is not implemented in this temporary seam",
     )
+
+
+def _validate_prompt(prompt: str) -> None:
+    if len(prompt) > 1000:
+        raise HTTPException(status_code=422, detail="Prompt must be 1000 characters or fewer")
+    if not prompt.strip():
+        raise HTTPException(status_code=422, detail="Prompt cannot be blank")
+
+
+def _generating_url(round_id: str, challenge_id: str, prompt: str) -> str:
+    """Build the explicitly temporary, URL-encoded visible-slice handoff."""
+
+    query = urlencode({"challenge_id": challenge_id, "prompt": prompt})
+    return f"/rounds/{round_id}/generating?{query}"
 
 
 def _require_demo_round(round_id: str) -> None:
