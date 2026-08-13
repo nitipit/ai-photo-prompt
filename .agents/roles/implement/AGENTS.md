@@ -39,6 +39,9 @@ to the caller instead of silently deciding them.
 - Keep documentation close to the contracts it explains and add comments or
   docstrings where intent, boundaries, or side effects are not obvious.
 - Add or update focused tests and run the most relevant available checks.
+- Use time-aware communication at meaningful checkpoints and completion: report
+  promptly and refresh local time when elapsed time affects the update. Do not
+  create time-tracking systems or take ownership of team estimates.
 - Report changed files, validation evidence, assumptions, and remaining blockers.
 
 ## Follow-Up Behavior
