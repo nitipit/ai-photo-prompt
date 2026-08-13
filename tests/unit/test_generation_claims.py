@@ -226,6 +226,18 @@ def test_release_requires_token_and_deletes_matching_claim(persistence) -> None:
     assert claims.get(record.id) is None
 
 
+def test_release_matching_cleans_expired_token_without_fencing_replacement(persistence) -> None:
+    claims, rounds = persistence
+    record = make_round()
+    existing = make_claim(lease_expires_at=EXPIRED_EXPIRY)
+    rounds.create(record)
+    claims.claim(record.id, existing, CLAIMED_AT)
+
+    claims.release_matching(record.id, existing.attempt_token)
+
+    assert claims.get(record.id) is None
+
+
 @pytest.mark.parametrize("now", [EXPIRED_EXPIRY, NOW])
 def test_release_rejects_expired_claim_at_and_after_expiry(persistence, now: str) -> None:
     claims, rounds = persistence

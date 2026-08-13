@@ -89,6 +89,10 @@ _DEFAULT_CLAIM_LEASE = timedelta(seconds=30)
 _DEFAULT_PROVIDER_TIMEOUT = 10.0
 _PROVIDER_TIMEOUT_CODE = "provider_timeout"
 _PROVIDER_TIMEOUT_MESSAGE = "การประมวลผล AI ใช้เวลานานเกินไป"
+_PROVIDER_ERROR_CODE = "provider_error"
+_PROVIDER_ERROR_MESSAGE = "การประมวลผล AI ล้มเหลวชั่วคราว"
+_INVALID_PIPELINE_RESULT_CODE = "invalid_pipeline_result"
+_INVALID_PIPELINE_RESULT_MESSAGE = "ผลลัพธ์จาก AI ไม่ถูกต้อง"
 _MAX_DISPLAY_NAME_LENGTH = 30
 _MAX_PROMPT_LENGTH = 1000
 _ANONYMOUS_NAME = "นิรนาม"
@@ -271,27 +275,36 @@ class GameRoundService:
             await asyncio.to_thread(claims.claim, round_id, claim, claimed_at)
         except RoundNotClaimableError as error:
             raise GameRoundConflictError(f"cannot generate from {record.state.value}") from error
+        except asyncio.CancelledError:
+            await self._release_cancelled_attempt(claims, round_id, claim)
+            raise
 
         try:
-            result = await asyncio.wait_for(
-                pipeline.run(challenge, prompt, timeout=self._provider_timeout),
-                timeout=self._provider_timeout,
-            )
-        except TimeoutError:
-            result = AIPipelineResult(
-                status=PipelineResultStatus.ERROR,
-                failure=FailureDetail(
-                    code=_PROVIDER_TIMEOUT_CODE,
-                    message=_PROVIDER_TIMEOUT_MESSAGE,
-                    retryable=True,
-                ),
-            )
-        if not isinstance(result, AIPipelineResult):
-            raise GameRoundValidationError("pipeline returned an invalid result")
+            try:
+                raw_result = await asyncio.wait_for(
+                    pipeline.run(challenge, prompt, timeout=self._provider_timeout),
+                    timeout=self._provider_timeout,
+                )
+            except asyncio.CancelledError:
+                raise
+            except TimeoutError:
+                raw_result = self._bounded_failure_result(
+                    _PROVIDER_TIMEOUT_CODE,
+                    _PROVIDER_TIMEOUT_MESSAGE,
+                )
+            except Exception:
+                raw_result = self._bounded_failure_result(
+                    _PROVIDER_ERROR_CODE,
+                    _PROVIDER_ERROR_MESSAGE,
+                )
 
-        if result.status is PipelineResultStatus.SUCCESS:
-            return await self._persist_generation_success(record, result, claims, claim)
-        return await self._persist_generation_failure(record, result, claims, claim)
+            result = self._normalize_pipeline_result(raw_result)
+            if result.status is PipelineResultStatus.SUCCESS:
+                return await self._persist_generation_success(record, result, claims, claim)
+            return await self._persist_generation_failure(record, result, claims, claim)
+        except asyncio.CancelledError:
+            await self._release_cancelled_attempt(claims, round_id, claim)
+            raise
 
     async def abandon_generation(self, round_id: str) -> RoundRecord:
         """Atomically abandon generation and fence any late provider result."""
@@ -467,7 +480,11 @@ class GameRoundService:
             or result.image_evaluation is None
             or result.score is None
         ):
-            raise GameRoundValidationError("pipeline success result is incomplete")
+            result = self._bounded_failure_result(
+                _INVALID_PIPELINE_RESULT_CODE,
+                _INVALID_PIPELINE_RESULT_MESSAGE,
+            )
+            return await self._persist_generation_failure(record, result, claims, claim)
 
         machine = RoundStateMachine.from_record(RoundRecord(record.dict()))
         self._transition(
@@ -508,7 +525,10 @@ class GameRoundService:
         """Persist only a safe bounded failure and release the attempt token."""
 
         if result.failure is None:
-            raise GameRoundValidationError("pipeline failure result is incomplete")
+            result = self._bounded_failure_result(
+                _INVALID_PIPELINE_RESULT_CODE,
+                _INVALID_PIPELINE_RESULT_MESSAGE,
+            )
 
         machine = RoundStateMachine.from_record(RoundRecord(record.dict()))
         self._transition(machine, machine.pipeline_failed, "pipeline_failed")
@@ -536,6 +556,50 @@ class GameRoundService:
             record,
         )
         return replacement
+
+    async def _release_cancelled_attempt(
+        self,
+        claims: ShelfDbGenerationClaims,
+        round_id: str,
+        claim: AttemptClaim,
+    ) -> None:
+        """Release a token after cancellation without swallowing cancellation."""
+
+        try:
+            await asyncio.shield(
+                asyncio.to_thread(
+                    claims.release_matching,
+                    round_id,
+                    claim.attempt_token,
+                )
+            )
+        except StaleAttemptTokenError:
+            # A concurrent abandon or replacement already fenced this token.
+            pass
+
+    @staticmethod
+    def _bounded_failure_result(code: str, message: str) -> AIPipelineResult:
+        return AIPipelineResult(
+            status=PipelineResultStatus.ERROR,
+            failure=FailureDetail(code=code, message=message, retryable=True),
+        )
+
+    @classmethod
+    def _normalize_pipeline_result(cls, result: object) -> AIPipelineResult:
+        """Validate a provider envelope without allowing its details to escape."""
+
+        if not isinstance(result, AIPipelineResult):
+            return cls._bounded_failure_result(
+                _INVALID_PIPELINE_RESULT_CODE,
+                _INVALID_PIPELINE_RESULT_MESSAGE,
+            )
+        try:
+            return AIPipelineResult(result.dict())
+        except Exception:
+            return cls._bounded_failure_result(
+                _INVALID_PIPELINE_RESULT_CODE,
+                _INVALID_PIPELINE_RESULT_MESSAGE,
+            )
 
     async def _replace_and_release(
         self,

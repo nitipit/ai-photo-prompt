@@ -128,6 +128,18 @@ class ShelfDbGenerationClaims:
             _require_live_matching_claim(shelf, round_id, attempt_token, now_value)
             shelf.key(round_id).delete()
 
+    def release_matching(self, round_id: str, attempt_token: str) -> None:
+        """Delete a claim only when its token still matches, even if expired.
+
+        Cancellation cleanup must release an abandoned token without pretending that
+        the claim is still live.  Token comparison still fences a replacement claim.
+        """
+
+        with self._write_lock, self._db.transaction(write=True) as transaction:
+            shelf = transaction.shelf(_CLAIMS_SHELF)
+            _require_matching_claim(shelf, round_id, attempt_token)
+            shelf.key(round_id).delete()
+
     def replace_round_and_release(
         self,
         record: RoundRecord,

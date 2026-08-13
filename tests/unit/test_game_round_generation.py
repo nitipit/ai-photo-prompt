@@ -4,6 +4,7 @@ import asyncio
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from threading import get_ident
+from types import SimpleNamespace
 
 import pytest
 from shelfdb.shelf import DB  # type: ignore[import-untyped]
@@ -82,6 +83,10 @@ class RecordingClaims:
             expected=expected,
         )
 
+    def release_matching(self, round_id, attempt_token):
+        self.calls.append(("release_matching", get_ident()))
+        return self.claims.release_matching(round_id, attempt_token)
+
     def replace_round_and_clear_claim(self, record, *, expected=None):
         self.calls.append(("replace_round_and_clear_claim", get_ident()))
         return self.claims.replace_round_and_clear_claim(record, expected=expected)
@@ -98,6 +103,27 @@ class RetryPipeline:
         if self.calls == 1:
             return failure_result()
         return success_result(challenge)
+
+
+class RaisingPipeline:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def run(self, challenge: ChallengeSpec, prompt: str, timeout: float) -> AIPipelineResult:
+        del challenge, prompt, timeout
+        self.calls += 1
+        raise RuntimeError("provider secret should not be persisted")
+
+
+class StaticPipeline:
+    def __init__(self, result: object) -> None:
+        self.calls = 0
+        self.result = result
+
+    async def run(self, challenge: ChallengeSpec, prompt: str, timeout: float) -> object:
+        del challenge, prompt, timeout
+        self.calls += 1
+        return self.result
 
 
 class BlockingPipeline:
@@ -264,6 +290,114 @@ async def test_failure_remains_generating_and_retry_is_available(setup) -> None:
     assert failed.score is None
     assert failed.feedback == []
     assert failed.completed_at is None
+    assert retried.state is GameState.GENERATED_REVEAL
+    assert pipeline.calls == 2
+    assert claims.get(generating.id) is None
+
+
+@pytest.mark.asyncio
+async def test_provider_exception_is_safe_retryable_failure_and_releases_claim(setup) -> None:
+    repository, claims, clock = setup
+    pipeline = RaisingPipeline()
+    service = service_for(repository, claims, clock, pipeline)
+    generating = await prepare_generating(service)
+
+    failed = await service.generate_round(generating.id)
+    retried = await service.generate_round(generating.id)
+
+    for result in (failed, retried):
+        assert result.state is GameState.GENERATING
+        assert result.pipeline_failure is not None
+        assert result.pipeline_failure.code == "provider_error"
+        assert result.pipeline_failure.retryable is True
+        assert "provider secret" not in result.pipeline_failure.message
+        assert result.generated_artifact is None
+        assert result.score is None
+    assert pipeline.calls == 2
+    assert claims.get(generating.id) is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "malformed",
+    [None, object(), SimpleNamespace(status=PipelineResultStatus.SUCCESS)],
+    ids=["none", "wrong-type", "malformed-envelope"],
+)
+async def test_invalid_pipeline_return_is_safe_retryable_failure_and_retryable(
+    setup,
+    malformed: object,
+) -> None:
+    repository, claims, clock = setup
+    pipeline = StaticPipeline(malformed)
+    service = service_for(repository, claims, clock, pipeline)
+    generating = await prepare_generating(service)
+
+    failed = await service.generate_round(generating.id)
+    retried = await service.generate_round(generating.id)
+
+    for result in (failed, retried):
+        assert result.state is GameState.GENERATING
+        assert result.pipeline_failure is not None
+        assert result.pipeline_failure.code == "invalid_pipeline_result"
+        assert result.pipeline_failure.retryable is True
+        assert result.generated_artifact is None
+        assert result.score is None
+    assert pipeline.calls == 2
+    assert claims.get(generating.id) is None
+
+
+@pytest.mark.asyncio
+async def test_incomplete_pipeline_envelopes_are_persisted_as_safe_failures(setup) -> None:
+    repository, claims, clock = setup
+    generating = await prepare_generating(service_for(repository, claims, clock))
+    challenge = make_catalog().get(generating.challenge_id)
+
+    incomplete_success = success_result(challenge)
+    success_data = incomplete_success.dict()
+    success_data["artifact"] = None
+    object.__setattr__(incomplete_success, "_data", success_data)
+
+    incomplete_error = failure_result()
+    error_data = incomplete_error.dict()
+    error_data["failure"] = None
+    object.__setattr__(incomplete_error, "_data", error_data)
+
+    for malformed in (incomplete_success, incomplete_error):
+        pipeline = StaticPipeline(malformed)
+        service = service_for(repository, claims, clock, pipeline)
+        failed = await service.generate_round(generating.id)
+        assert failed.state is GameState.GENERATING
+        assert failed.pipeline_failure is not None
+        assert failed.pipeline_failure.code == "invalid_pipeline_result"
+        assert failed.pipeline_failure.retryable is True
+        assert failed.score is None
+        assert claims.get(generating.id) is None
+
+
+@pytest.mark.asyncio
+async def test_cancellation_releases_claim_preserves_round_and_allows_retry(setup) -> None:
+    repository, claims, clock = setup
+    pipeline = BlockingPipeline()
+    service = service_for(repository, claims, clock, pipeline)
+    generating = await prepare_generating(service)
+    before = await service.get_round(generating.id)
+
+    attempt = asyncio.create_task(service.generate_round(generating.id))
+    await pipeline.started.wait()
+    attempt.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await attempt
+
+    stored = await service.get_round(generating.id)
+    assert stored.dict() == before.dict()
+    assert stored.state is GameState.GENERATING
+    assert stored.generated_artifact is None
+    assert stored.score is None
+    assert claims.get(generating.id) is None
+
+    pipeline.release.set()
+    retried = await service.generate_round(generating.id)
     assert retried.state is GameState.GENERATED_REVEAL
     assert pipeline.calls == 2
     assert claims.get(generating.id) is None
