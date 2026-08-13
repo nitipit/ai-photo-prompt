@@ -72,3 +72,4 @@ discoveries, patterns, problems, and next-step context.
 | `management>learn-from-worker-evidence adapt-next-assignment` | 2026-08-13T18:02:28+07:00 |
 | `workers>single-outcome-executors manager-owns-coordination` | 2026-08-13T18:02:28+07:00 |
 | `workers>stateful-owned-tmux keep-until-accepted then-clean` | 2026-08-13T18:09:11+07:00 |
+| `worktrees>persistent-kus-sibling never-tmp` | 2026-08-13T18:10:38+07:00 |
