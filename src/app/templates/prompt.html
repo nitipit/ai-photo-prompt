@@ -1,0 +1,74 @@
+{% extends "_base.html" %} {% block title %}เขียนคำสั่ง | Photo Prompt{% endblock
+%} {% block content %}
+<main class="scene prompt-scene" data-scene="prompt-entry">
+  <header class="scene-topbar">
+    <a class="brand" href="/" aria-label="กลับหน้าพร้อมเล่น">
+      <span class="brand-mark" aria-hidden="true">✦</span>
+      <span class="brand-name">PHOTO <strong>PROMPT</strong></span>
+    </a>
+    <p class="scene-tag">เขียนคำสั่ง</p>
+  </header>
+
+  <form
+    id="prompt-form"
+    class="prompt-layout"
+    action="/rounds/{{ round_id }}/prompt"
+    method="post"
+  >
+    <input type="hidden" name="challenge_id" value="{{ challenge.id }}" />
+    <input
+      id="submission-reason"
+      type="hidden"
+      name="submission_reason"
+      value="manual"
+    />
+
+    <section class="prompt-heading" aria-labelledby="prompt-title">
+      <p class="eyebrow">ถึงตาคุณแล้ว</p>
+      <h1 id="prompt-title">
+        เขียนคำสั่งให้ AI<br /><span>สร้างภาพนี้ในแบบของคุณ</span>
+      </h1>
+    </section>
+
+    <div class="prompt-workspace">
+      <figure class="prompt-reference">
+        <div class="prompt-reference-frame">
+          <img
+            class="prompt-reference-image"
+            src="{{ challenge.target_asset_url }}"
+            alt="ภาพอ้างอิงสำหรับรอบนี้"
+          />
+        </div>
+        <figcaption>ภาพอ้างอิง</figcaption>
+      </figure>
+
+      <div class="prompt-editor">
+        <label class="prompt-label" for="prompt-text">คำสั่งของคุณ</label>
+        <textarea
+          id="prompt-text"
+          name="prompt"
+          maxlength="1000"
+          rows="6"
+          placeholder="ลองบอกสิ่งที่เห็น สี บรรยากาศ หรือรายละเอียดที่อยากให้มี..."
+        ></textarea>
+        <p class="prompt-hint">เขียนให้ชัดเจนและสร้างสรรค์ได้เต็มที่</p>
+      </div>
+    </div>
+
+    <div class="prompt-action">
+      <div class="prompt-timer" aria-label="เวลาที่เหลือ">
+        <span>เวลาที่เหลือ</span>
+        <strong id="prompt-countdown" data-seconds="90" aria-live="polite"
+        >01:30</strong>
+      </div>
+      <kiosk-button>
+        <button id="submit-prompt-button" type="submit">
+          ส่งคำสั่ง <span aria-hidden="true">→</span>
+        </button>
+      </kiosk-button>
+    </div>
+  </form>
+</main>
+{% endblock %} {% block page_script %}
+<script type="module" src="/templates/prompt.js"></script>
+{% endblock %}

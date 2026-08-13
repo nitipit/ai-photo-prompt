@@ -29,6 +29,7 @@
 
     <div class="challenge-action">
       <form action="/rounds/{{ round_id }}/challenge/continue" method="post">
+        <input type="hidden" name="challenge_id" value="{{ challenge.id }}" />
         <kiosk-button>
           <button id="continue-challenge-button" type="submit">
             พร้อมแล้ว <span aria-hidden="true">→</span>

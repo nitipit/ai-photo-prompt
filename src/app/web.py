@@ -37,3 +37,13 @@ def render_challenge_reveal(request: Request, round_id: str, challenge):
         name="challenge.html",
         context={"round_id": round_id, "challenge": challenge},
     )
+
+
+def render_prompt_entry(request: Request, round_id: str, challenge):
+    """Render Prompt Entry with the selected challenge as a visual-only reference."""
+
+    return templates.TemplateResponse(
+        request=request,
+        name="prompt.html",
+        context={"round_id": round_id, "challenge": challenge},
+    )

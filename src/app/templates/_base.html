@@ -48,7 +48,7 @@
           color: inherit;
           text-decoration: none;
         }
-        button, input {
+        button, input, textarea {
           font: inherit;
         }
 
@@ -629,6 +629,166 @@
           margin: 0;
           color: var(--muted);
           font-size: clamp(0.7rem, 1vw, 0.88rem);
+        }
+
+        .prompt-scene {
+          background:
+            radial-gradient(
+              circle at 18% 36%,
+              rgba(66, 214, 196, 0.12),
+              transparent 32%
+            ),
+            linear-gradient(145deg, var(--navy-950), var(--navy-900));
+        }
+
+        .prompt-layout {
+          display: grid;
+          grid-template-rows: auto minmax(0, 1fr) auto;
+          gap: 1rem;
+          height: 100%;
+          padding: 11% 7% 5%;
+        }
+
+        .prompt-heading {
+          text-align: center;
+        }
+
+        .prompt-heading .eyebrow {
+          margin-bottom: 0.55rem;
+        }
+
+        .prompt-heading h1 {
+          font-size: clamp(1.8rem, 3.4vw, 3.6rem);
+        }
+
+        .prompt-heading h1 span {
+          color: var(--coral);
+        }
+
+        .prompt-workspace {
+          display: grid;
+          grid-template-columns: minmax(0, 0.82fr) minmax(0, 1.18fr);
+          align-items: center;
+          gap: 5%;
+          min-height: 0;
+        }
+
+        .prompt-reference {
+          display: grid;
+          align-content: center;
+          justify-items: center;
+          min-width: 0;
+          min-height: 0;
+          margin: 0;
+        }
+
+        .prompt-reference-frame {
+          position: relative;
+          width: min(100%, 26rem, 45vh);
+          aspect-ratio: 16 / 9;
+          overflow: hidden;
+          border: 0.3rem solid rgba(245, 247, 239, 0.88);
+          border-radius: 1.2rem;
+          background: var(--navy-950);
+          box-shadow:
+            0 1rem 0 rgba(66, 214, 196, 0.16),
+            0 1.5rem 3rem rgba(0, 0, 0, 0.24);
+        }
+
+        .prompt-reference-frame::after {
+          position: absolute;
+          inset: 0;
+          border: 1px solid rgba(66, 214, 196, 0.45);
+          border-radius: 0.9rem;
+          content: "";
+          pointer-events: none;
+        }
+
+        .prompt-reference-image {
+          display: block;
+          width: 100%;
+          height: 100%;
+          object-fit: cover;
+        }
+
+        .prompt-reference figcaption {
+          margin-top: 0.9rem;
+          color: var(--muted);
+          font-size: clamp(0.7rem, 0.95vw, 0.84rem);
+        }
+
+        .prompt-editor {
+          display: grid;
+          align-content: center;
+          gap: 0.7rem;
+          min-width: 0;
+        }
+
+        .prompt-label {
+          color: var(--paper);
+          font-size: clamp(1rem, 1.5vw, 1.35rem);
+          font-weight: 800;
+        }
+
+        .prompt-editor textarea {
+          width: 100%;
+          min-height: clamp(8rem, 20vh, 15rem);
+          max-height: 15rem;
+          resize: none;
+          border: 1px solid rgba(157, 181, 189, 0.42);
+          border-radius: 1.1rem;
+          padding: 1rem 1.1rem;
+          outline: none;
+          background: rgba(7, 26, 45, 0.6);
+          color: var(--paper);
+          font-size: clamp(0.9rem, 1.3vw, 1.15rem);
+          line-height: 1.6;
+        }
+
+        .prompt-editor textarea::placeholder {
+          color: #78939e;
+        }
+
+        .prompt-editor textarea:focus {
+          border-color: var(--teal);
+          box-shadow: 0 0 0 3px rgba(66, 214, 196, 0.16);
+        }
+
+        .prompt-hint {
+          margin: 0;
+          color: var(--muted);
+          font-size: clamp(0.68rem, 0.95vw, 0.82rem);
+        }
+
+        .prompt-action {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          width: min(100%, 68rem);
+          min-height: 5.75rem;
+          justify-self: center;
+          gap: 1rem;
+          border-top: 1px solid rgba(157, 181, 189, 0.28);
+          border-radius: 1.25rem 1.25rem 0 0;
+          padding: 0.85rem 1rem 0;
+          background: rgba(7, 26, 45, 0.36);
+        }
+
+        .prompt-timer {
+          display: grid;
+          gap: 0.1rem;
+          color: var(--muted);
+          font-size: clamp(0.7rem, 1vw, 0.88rem);
+        }
+
+        .prompt-timer strong {
+          color: var(--gold);
+          font-size: clamp(1.4rem, 2.4vw, 2.1rem);
+          line-height: 1;
+        }
+
+        .prompt-action kiosk-button {
+          flex: 0 0 auto;
         }
 
         @media (max-width: 900px) {
