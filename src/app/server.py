@@ -14,11 +14,16 @@ from fastapi.staticfiles import StaticFiles
 from shelfdb.shelf import DB  # type: ignore[import-untyped]
 
 from .ai import FakeAIPipeline
-from .config import DEFAULT_CATALOG_PATH, DEFAULT_DB_PATH, DEMO_ROUND_ID, DIST_DIR
-from .content.repository import CatalogValidationError, ChallengeCatalog
-from .domain.models import ChallengeSpec, LevelGroup, PromptSubmissionReason
-from .persistence import ShelfDbGenerationClaims, ShelfDbRoundRepository
-from .services import GameRoundService
+from .config import DEFAULT_CATALOG_PATH, DEFAULT_DB_PATH, DIST_DIR
+from .content.repository import ChallengeCatalog
+from .domain.models import ChallengeSpec, GameState, LevelGroup, PromptSubmissionReason
+from .persistence import RoundNotFoundError, ShelfDbGenerationClaims, ShelfDbRoundRepository
+from .services import (
+    GameRoundConflictError,
+    GameRoundDeadlineError,
+    GameRoundService,
+    GameRoundValidationError,
+)
 from .web import (
     render_challenge_reveal,
     render_generating,
@@ -130,110 +135,126 @@ async def ready(request: Request):
 
 
 @app.post("/rounds", status_code=303)
-async def start_demo_round() -> RedirectResponse:
-    """Start the visible checkpoint without creating fake persistence."""
+async def start_round(
+    request: Request,
+    display_name: str = Form(default=""),
+) -> RedirectResponse:
+    """Create a durable anonymous-or-named round and open level selection."""
 
-    return RedirectResponse(
-        url=f"/rounds/{DEMO_ROUND_ID}/level",
-        status_code=303,
-    )
+    try:
+        record = await request.app.state.game_round_service.create_round(display_name)
+    except GameRoundValidationError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    return RedirectResponse(url=f"/rounds/{record.id}/level", status_code=303)
 
 
 @app.get("/rounds/{round_id}/level", response_class=HTMLResponse)
 async def level_selection(request: Request, round_id: str):
-    """Render Level Selection for the explicitly temporary demo round only."""
+    """Render level selection only for a round in its persisted setup state."""
 
-    _require_demo_round(round_id)
+    await _get_scene_round(request, round_id, GameState.LEVEL_SELECTION)
     return render_level_selection(request, round_id)
 
 
 @app.post("/rounds/{round_id}/level", status_code=303)
-async def configure_demo_round(
+async def configure_round(
+    request: Request,
     round_id: str,
-    display_name: str = Form(default=""),
     level: str = Form(...),
 ) -> RedirectResponse:
-    """Select the first approved challenge for the submitted level."""
+    """Persist level and challenge selection before opening the challenge scene."""
 
-    _require_demo_round(round_id)
     try:
-        selected_level = LevelGroup(level)
-    except ValueError as error:
-        raise HTTPException(status_code=422, detail="Unknown level") from error
-
-    challenges = _load_challenge_catalog().for_level(selected_level)
-    if not challenges:
-        raise HTTPException(status_code=500, detail="No challenge is available for this level")
-
-    # ``display_name`` is accepted at this temporary seam but has no persistence owner yet.
-    _ = display_name
-    challenge = challenges[0]
+        record = await request.app.state.game_round_service.configure_round(round_id, level)
+    except RoundNotFoundError as error:
+        raise HTTPException(status_code=404, detail="Round not found") from error
+    except GameRoundValidationError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    except GameRoundConflictError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    if record.challenge_id is None:
+        raise HTTPException(status_code=409, detail="Configured round has no challenge")
     return RedirectResponse(
-        url=f"/rounds/{round_id}/challenge?challenge_id={challenge.id}",
+        url=f"/rounds/{round_id}/challenge",
         status_code=303,
     )
 
 
 @app.get("/rounds/{round_id}/challenge", response_class=HTMLResponse)
-async def challenge_reveal(request: Request, round_id: str, challenge_id: str):
-    """Render the selected challenge image from the generated runtime catalog."""
+async def challenge_reveal(request: Request, round_id: str):
+    """Render the durable challenge selected for this round."""
 
-    _require_demo_round(round_id)
-    try:
-        challenge = _load_challenge_catalog().get(challenge_id)
-    except KeyError as error:
-        raise HTTPException(status_code=404, detail="Challenge not found") from error
+    record = await _get_scene_round(request, round_id, GameState.CHALLENGE_REVEAL)
+    challenge = _challenge_for_round(request, record)
     return render_challenge_reveal(request, round_id, challenge)
 
 
 @app.post("/rounds/{round_id}/challenge/continue", status_code=303)
-async def continue_demo_challenge(
-    round_id: str,
-    challenge_id: str = Form(...),
-) -> RedirectResponse:
-    """Carry the selected challenge into the temporary Prompt Entry scene."""
+async def continue_challenge(request: Request, round_id: str) -> RedirectResponse:
+    """Advance the persisted challenge reveal into prompt entry."""
 
-    _require_demo_round(round_id)
-    _get_challenge(challenge_id)
-    return RedirectResponse(
-        url=f"/rounds/{round_id}/prompt?challenge_id={challenge_id}",
-        status_code=303,
-    )
+    try:
+        await request.app.state.game_round_service.continue_challenge(round_id)
+    except RoundNotFoundError as error:
+        raise HTTPException(status_code=404, detail="Round not found") from error
+    except GameRoundValidationError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    except GameRoundConflictError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    return RedirectResponse(url=f"/rounds/{round_id}/prompt", status_code=303)
 
 
 @app.get("/rounds/{round_id}/prompt", response_class=HTMLResponse)
-async def prompt_entry(request: Request, round_id: str, challenge_id: str):
-    """Render Prompt Entry with only the selected challenge reference image."""
+async def prompt_entry(request: Request, round_id: str):
+    """Render the durable challenge and server-authorized prompt deadline."""
 
-    _require_demo_round(round_id)
-    return render_prompt_entry(request, round_id, _get_challenge(challenge_id))
+    record = await _get_scene_round(request, round_id, GameState.PROMPT_ENTRY)
+    challenge = _challenge_for_round(request, record)
+    if record.prompt_deadline is None:
+        raise HTTPException(status_code=409, detail="Prompt deadline is unavailable")
+    return render_prompt_entry(
+        request,
+        round_id,
+        challenge,
+        prompt_deadline=record.prompt_deadline,
+    )
 
 
 @app.post("/rounds/{round_id}/prompt")
-async def submit_demo_prompt(
+async def submit_prompt(
+    request: Request,
     round_id: str,
-    challenge_id: str = Form(...),
     prompt: str = Form(default=""),
     submission_reason: str = Form(...),
 ):
-    """Validate prompt input before the temporary Generating scene handoff."""
+    """Persist prompt submission before handing off to temporary Generating."""
 
-    _require_demo_round(round_id)
-    _get_challenge(challenge_id)
-    if len(prompt) > 1000:
-        raise HTTPException(status_code=422, detail="Prompt must be 1000 characters or fewer")
     try:
         reason = PromptSubmissionReason(submission_reason)
     except ValueError as error:
         raise HTTPException(status_code=422, detail="Unknown prompt submission reason") from error
 
-    if not prompt.strip():
-        if reason is PromptSubmissionReason.TIMEOUT:
-            return RedirectResponse(url="/", status_code=303)
-        raise HTTPException(status_code=422, detail="Prompt cannot be blank")
+    try:
+        record = await request.app.state.game_round_service.submit_prompt(
+            round_id,
+            prompt,
+            reason,
+        )
+    except RoundNotFoundError as error:
+        raise HTTPException(status_code=404, detail="Round not found") from error
+    except GameRoundDeadlineError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    except GameRoundValidationError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    except GameRoundConflictError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
 
+    if not prompt.strip() and reason is PromptSubmissionReason.TIMEOUT:
+        return RedirectResponse(url="/", status_code=303)
+    if record.challenge_id is None or record.prompt is None:
+        raise HTTPException(status_code=409, detail="Submitted round is missing generation context")
     return RedirectResponse(
-        url=_generating_url(round_id, challenge_id, prompt),
+        url=_generating_url(round_id, record.challenge_id, record.prompt),
         status_code=303,
     )
 
@@ -242,68 +263,52 @@ async def submit_demo_prompt(
 async def generating_scene(
     request: Request,
     round_id: str,
-    challenge_id: str,
-    prompt: str,
+    challenge_id: str | None = None,
+    prompt: str | None = None,
     failure: str | None = None,
 ):
-    """Render the temporary Generating scene for one validated challenge and prompt."""
+    """Render the temporary Generating scene from persisted setup context."""
 
-    _require_demo_round(round_id)
-    challenge = _get_challenge(challenge_id)
-    _validate_prompt(prompt)
+    record = await _get_scene_round(request, round_id, GameState.GENERATING)
+    challenge, stored_prompt = _generation_context(request, record)
     return render_generating(
         request,
         round_id,
         challenge,
-        prompt,
+        stored_prompt,
         failure=failure == "1",
     )
 
 
 @app.post("/rounds/{round_id}/generating/retry", status_code=303)
-async def retry_demo_generation(
-    round_id: str,
-    challenge_id: str = Form(...),
-    prompt: str = Form(...),
-) -> RedirectResponse:
-    """Retry the temporary Generating scene without limiting attempts."""
+async def retry_demo_generation(request: Request, round_id: str) -> RedirectResponse:
+    """Retry the temporary Generating scene using stored challenge and prompt."""
 
-    _require_demo_round(round_id)
-    _get_challenge(challenge_id)
-    _validate_prompt(prompt)
+    record = await _get_scene_round(request, round_id, GameState.GENERATING)
+    challenge, prompt = _generation_context(request, record)
     return RedirectResponse(
-        url=_generating_url(round_id, challenge_id, prompt),
+        url=_generating_url(round_id, challenge.id, prompt),
         status_code=303,
     )
 
 
 @app.post("/rounds/{round_id}/generating/exit", status_code=303)
-async def exit_demo_generation(
-    round_id: str,
-    challenge_id: str = Form(...),
-    prompt: str = Form(...),
-) -> RedirectResponse:
+async def exit_demo_generation(request: Request, round_id: str) -> RedirectResponse:
     """Exit the temporary failure state without creating a result or score."""
 
-    _require_demo_round(round_id)
-    _get_challenge(challenge_id)
-    _validate_prompt(prompt)
+    record = await _get_scene_round(request, round_id, GameState.GENERATING)
+    _generation_context(request, record)
     return RedirectResponse(url="/", status_code=303)
 
 
 @app.post("/rounds/{round_id}/generating/continue", status_code=303)
-async def continue_demo_generation(
-    round_id: str,
-    challenge_id: str = Form(...),
-    prompt: str = Form(...),
-) -> RedirectResponse:
-    """Validate the reveal and redirect to the temporary Result scene."""
+async def continue_demo_generation(request: Request, round_id: str) -> RedirectResponse:
+    """Redirect to the temporary Result scene with stored generation context."""
 
-    _require_demo_round(round_id)
-    _get_challenge(challenge_id)
-    _validate_prompt(prompt)
+    record = await _get_scene_round(request, round_id, GameState.GENERATING)
+    challenge, prompt = _generation_context(request, record)
     return RedirectResponse(
-        url=_result_url(round_id, challenge_id, prompt),
+        url=_result_url(round_id, challenge.id, prompt),
         status_code=303,
     )
 
@@ -315,10 +320,10 @@ async def result_scene(
     challenge_id: str,
     prompt: str,
 ):
-    """Render deterministic demo feedback for one validated challenge and prompt."""
+    """Render deterministic demo feedback for one existing round context."""
 
-    _require_demo_round(round_id)
-    challenge = _get_challenge(challenge_id)
+    await _require_round_context(request, round_id)
+    challenge = _get_challenge(request, challenge_id)
     _validate_prompt(prompt)
     return render_result(
         request,
@@ -332,6 +337,7 @@ async def result_scene(
 
 @app.post("/rounds/{round_id}/result/leaderboard", status_code=303)
 async def continue_demo_leaderboard(
+    request: Request,
     round_id: str,
     challenge_id: str = Form(...),
     prompt: str = Form(...),
@@ -340,8 +346,8 @@ async def continue_demo_leaderboard(
 ) -> RedirectResponse:
     """Validate the fixed demo result before the temporary Leaderboard scene."""
 
-    _require_demo_round(round_id)
-    challenge = _get_challenge(challenge_id)
+    await _require_round_context(request, round_id)
+    challenge = _get_challenge(request, challenge_id)
     selected_level = _validate_leaderboard_context(challenge, prompt, score, level)
     return RedirectResponse(
         url=_leaderboard_url(round_id, challenge_id, prompt, score, selected_level.value),
@@ -360,8 +366,8 @@ async def leaderboard_scene(
 ):
     """Render the deterministic current-level leaderboard checkpoint."""
 
-    _require_demo_round(round_id)
-    challenge = _get_challenge(challenge_id)
+    await _require_round_context(request, round_id)
+    challenge = _get_challenge(request, challenge_id)
     selected_level = _validate_leaderboard_context(challenge, prompt, score, level)
     rows = tuple(
         {
@@ -445,21 +451,42 @@ def _leaderboard_url(
     return f"/rounds/{round_id}/leaderboard?{query}"
 
 
-def _require_demo_round(round_id: str) -> None:
-    if round_id != DEMO_ROUND_ID:
-        raise HTTPException(status_code=404, detail="Round not found")
+async def _require_round_context(request: Request, round_id: str):
+    """Load one durable round, mapping repository absence to HTTP 404."""
 
-
-def _load_challenge_catalog() -> ChallengeCatalog:
     try:
-        return ChallengeCatalog.load(DIST_DIR / "catalog.json")
-    except CatalogValidationError as error:
-        raise HTTPException(status_code=500, detail="Challenge catalog is unavailable") from error
+        return await request.app.state.game_round_service.get_round(round_id)
+    except RoundNotFoundError as error:
+        raise HTTPException(status_code=404, detail="Round not found") from error
 
 
-def _get_challenge(challenge_id: str):
+async def _get_scene_round(request: Request, round_id: str, expected_state: GameState):
+    """Load a round and reject stale scene access with HTTP 409."""
+
+    record = await _require_round_context(request, round_id)
+    if record.state is not expected_state:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Round is in {record.state.value}, not {expected_state.value}",
+        )
+    return record
+
+
+def _challenge_for_round(request: Request, record):
+    if record.challenge_id is None:
+        raise HTTPException(status_code=409, detail="Round has no challenge")
+    return _get_challenge(request, record.challenge_id)
+
+
+def _generation_context(request: Request, record):
+    if record.challenge_id is None or record.prompt is None or not record.prompt.strip():
+        raise HTTPException(status_code=409, detail="Round has no generation context")
+    return _get_challenge(request, record.challenge_id), record.prompt
+
+
+def _get_challenge(request: Request, challenge_id: str):
     try:
-        return _load_challenge_catalog().get(challenge_id)
+        return request.app.state.catalog.get(challenge_id)
     except KeyError as error:
         raise HTTPException(status_code=404, detail="Challenge not found") from error
 

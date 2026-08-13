@@ -3,7 +3,7 @@
 from fastapi import Request
 from fastapi.templating import Jinja2Templates
 
-from .config import DEMO_ROUND_ID, TEMPLATE_DIR
+from .config import TEMPLATE_DIR
 
 templates = Jinja2Templates(directory=TEMPLATE_DIR)
 templates.env.auto_reload = True
@@ -12,15 +12,11 @@ templates.env.auto_reload = True
 def render_ready(request: Request):
     """Render the attract screen for the next player."""
 
-    return templates.TemplateResponse(
-        request=request,
-        name="ready.html",
-        context={"demo_round_id": DEMO_ROUND_ID},
-    )
+    return templates.TemplateResponse(request=request, name="ready.html", context={})
 
 
 def render_level_selection(request: Request, round_id: str):
-    """Render level selection for the temporary demo round seam."""
+    """Render level selection for a durable round in setup."""
 
     return templates.TemplateResponse(
         request=request,
@@ -67,13 +63,23 @@ def render_challenge_reveal(request: Request, round_id: str, challenge):
     )
 
 
-def render_prompt_entry(request: Request, round_id: str, challenge):
-    """Render Prompt Entry with the selected challenge as a visual-only reference."""
+def render_prompt_entry(
+    request: Request,
+    round_id: str,
+    challenge,
+    *,
+    prompt_deadline: str,
+):
+    """Render prompt entry with stored challenge and deadline context."""
 
     return templates.TemplateResponse(
         request=request,
         name="prompt.html",
-        context={"round_id": round_id, "challenge": challenge},
+        context={
+            "round_id": round_id,
+            "challenge": challenge,
+            "prompt_deadline": prompt_deadline,
+        },
     )
 
 

@@ -15,7 +15,6 @@
     action="/rounds/{{ round_id }}/prompt"
     method="post"
   >
-    <input type="hidden" name="challenge_id" value="{{ challenge.id }}" />
     <input
       id="submission-reason"
       type="hidden"
@@ -58,7 +57,11 @@
     <div class="prompt-action">
       <div class="prompt-timer" aria-label="เวลาที่เหลือ">
         <span>เวลาที่เหลือ</span>
-        <strong id="prompt-countdown" data-seconds="90" aria-live="polite"
+        <strong
+          id="prompt-countdown"
+          data-seconds="90"
+          data-deadline="{{ prompt_deadline }}"
+          aria-live="polite"
         >01:30</strong>
       </div>
       <kiosk-button>

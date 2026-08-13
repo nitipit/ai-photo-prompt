@@ -19,7 +19,17 @@
       <p class="ready-lede">
         สังเกตให้ดี คิดให้ชัด แล้วชวน AI สร้างภาพในแบบของคุณ
       </p>
-      <form action="/rounds" method="post">
+      <form id="start-form" action="/rounds" method="post">
+        <label class="name-field">
+          <span>ชื่อเล่น <small>ไม่บังคับ</small></span>
+          <input
+            type="text"
+            name="display_name"
+            maxlength="30"
+            placeholder="เช่น น้องฟ้า"
+            autocomplete="nickname"
+          />
+        </label>
         <kiosk-button>
           <button id="start-button" type="submit">
             เริ่มเล่น <span aria-hidden="true">→</span>
