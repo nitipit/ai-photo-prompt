@@ -69,3 +69,27 @@ def render_generating(
             "failure": failure,
         },
     )
+
+
+def render_result(
+    request: Request,
+    round_id: str,
+    challenge,
+    prompt: str,
+    *,
+    score: int,
+    feedback: tuple[tuple[str, str], ...],
+):
+    """Render deterministic demo feedback without implying real AI scoring."""
+
+    return templates.TemplateResponse(
+        request=request,
+        name="result.html",
+        context={
+            "round_id": round_id,
+            "challenge": challenge,
+            "prompt": prompt,
+            "score": score,
+            "feedback": feedback,
+        },
+    )

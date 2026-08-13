@@ -17,6 +17,7 @@ from .web import (
     render_level_selection,
     render_prompt_entry,
     render_ready,
+    render_result,
 )
 
 
@@ -28,6 +29,14 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
 
 
 app = FastAPI(title="Photo Prompt", lifespan=lifespan)
+
+DEMO_SCORE = 82
+DEMO_FEEDBACK = (
+    ("strength", "บอกองค์ประกอบสำคัญได้ชัดเจน"),
+    ("strength", "เลือกสีและบรรยากาศได้ตรงโจทย์"),
+    ("improvement", "ลองเพิ่มรายละเอียดตำแหน่งของสิ่งต่าง ๆ"),
+)
+LEADERBOARD_SEAM_MESSAGE = "Leaderboard scene is not implemented in this temporary seam"
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -199,21 +208,60 @@ async def exit_demo_generation(
     return RedirectResponse(url="/", status_code=303)
 
 
-@app.post("/rounds/{round_id}/generating/continue")
+@app.post("/rounds/{round_id}/generating/continue", status_code=303)
 async def continue_demo_generation(
     round_id: str,
     challenge_id: str = Form(...),
     prompt: str = Form(...),
-):
-    """Validate the visible reveal before handing off to the future Result scene."""
+) -> RedirectResponse:
+    """Validate the reveal and redirect to the temporary Result scene."""
 
     _require_demo_round(round_id)
     _get_challenge(challenge_id)
     _validate_prompt(prompt)
-    raise HTTPException(
-        status_code=501,
-        detail="Result scene is not implemented in this temporary seam",
+    return RedirectResponse(
+        url=_result_url(round_id, challenge_id, prompt),
+        status_code=303,
     )
+
+
+@app.get("/rounds/{round_id}/result", response_class=HTMLResponse)
+async def result_scene(
+    request: Request,
+    round_id: str,
+    challenge_id: str,
+    prompt: str,
+):
+    """Render deterministic demo feedback for one validated challenge and prompt."""
+
+    _require_demo_round(round_id)
+    challenge = _get_challenge(challenge_id)
+    _validate_prompt(prompt)
+    return render_result(
+        request,
+        round_id,
+        challenge,
+        prompt,
+        score=DEMO_SCORE,
+        feedback=DEMO_FEEDBACK,
+    )
+
+
+@app.post("/rounds/{round_id}/result/leaderboard")
+async def continue_demo_leaderboard(
+    round_id: str,
+    challenge_id: str = Form(...),
+    prompt: str = Form(...),
+    score: int = Form(...),
+):
+    """Validate the fixed demo result before the unimplemented Leaderboard seam."""
+
+    _require_demo_round(round_id)
+    _get_challenge(challenge_id)
+    _validate_prompt(prompt)
+    if score != DEMO_SCORE:
+        raise HTTPException(status_code=422, detail="Score does not match the demo result")
+    raise HTTPException(status_code=501, detail=LEADERBOARD_SEAM_MESSAGE)
 
 
 def _validate_prompt(prompt: str) -> None:
@@ -228,6 +276,13 @@ def _generating_url(round_id: str, challenge_id: str, prompt: str) -> str:
 
     query = urlencode({"challenge_id": challenge_id, "prompt": prompt})
     return f"/rounds/{round_id}/generating?{query}"
+
+
+def _result_url(round_id: str, challenge_id: str, prompt: str) -> str:
+    """Build the URL-encoded handoff into the temporary Result scene."""
+
+    query = urlencode({"challenge_id": challenge_id, "prompt": prompt})
+    return f"/rounds/{round_id}/result?{query}"
 
 
 def _require_demo_round(round_id: str) -> None:

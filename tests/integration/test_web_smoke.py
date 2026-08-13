@@ -197,19 +197,84 @@ def test_generating_failure_retry_preserves_context_and_exit_returns_ready() -> 
         assert exit_response.headers["location"] == "/"
 
 
-def test_generating_continue_preserves_the_temporary_result_seam() -> None:
+def test_generating_continue_redirects_to_encoded_result_scene() -> None:
+    prompt = "กระต่ายเชฟ & สีฟ้า + 50%"
     with TestClient(app) as client:
         continue_response = client.post(
             "/rounds/demo/generating/continue",
-            data={
+            data={"challenge_id": "p1-p3-01", "prompt": prompt},
+            follow_redirects=False,
+        )
+
+        assert continue_response.status_code == 303
+        location = urlsplit(continue_response.headers["location"])
+        assert location.path == "/rounds/demo/result"
+        assert parse_qs(location.query) == {
+            "challenge_id": ["p1-p3-01"],
+            "prompt": [prompt],
+        }
+        assert "+" in location.query
+        assert "%" in location.query
+
+
+def test_result_renders_deterministic_feedback_without_challenge_title() -> None:
+    with TestClient(app) as client:
+        result = client.get(
+            "/rounds/demo/result",
+            params={
                 "challenge_id": "p1-p3-01",
                 "prompt": "กระต่ายเชฟทำแพนเค้กยักษ์",
             },
         )
 
-        assert continue_response.status_code == 501
-        assert continue_response.json()["detail"] == (
-            "Result scene is not implemented in this temporary seam"
+        assert result.status_code == 200
+        assert 'data-scene="result"' in result.text
+        assert 'data-result-data="deterministic-demo"' in result.text
+        assert result.text.count('src="/assets/challenges/p1-p3-01.webp"') == 2
+        assert 'data-fake-generated-placeholder="true"' in result.text
+        assert 'data-placeholder-source="selected-target-asset"' in result.text
+        assert 'data-real-ai-output="false"' in result.text
+        assert 'data-demo-score="82"' in result.text
+        assert 'data-score-source="deterministic-demo-data"' in result.text
+        assert 'data-demo-feedback="true"' in result.text
+        assert 'data-feedback-source="deterministic-demo-data"' in result.text
+        assert result.text.count('data-feedback-kind="strength"') == 2
+        assert result.text.count('data-feedback-kind="improvement">') == 1
+        assert "82" in result.text
+        assert "เก่งมาก!" in result.text
+        assert "Rabbit chef and giant pancake" not in result.text
+        assert 'action="/rounds/demo/result/leaderboard"' in result.text
+        assert 'name="score" value="82"' in result.text
+
+
+def test_result_unknown_challenge_is_not_found() -> None:
+    with TestClient(app) as client:
+        result = client.get(
+            "/rounds/demo/result",
+            params={"challenge_id": "missing", "prompt": "ข้อความ"},
+        )
+        assert result.status_code == 404
+
+
+def test_leaderboard_seam_rejects_tampered_score_and_returns_exact_501() -> None:
+    data = {
+        "challenge_id": "p1-p3-01",
+        "prompt": "กระต่ายเชฟทำแพนเค้กยักษ์",
+    }
+    with TestClient(app) as client:
+        tampered = client.post(
+            "/rounds/demo/result/leaderboard",
+            data={**data, "score": "81"},
+        )
+        assert tampered.status_code == 422
+
+        seam = client.post(
+            "/rounds/demo/result/leaderboard",
+            data={**data, "score": "82"},
+        )
+        assert seam.status_code == 501
+        assert seam.json()["detail"] == (
+            "Leaderboard scene is not implemented in this temporary seam"
         )
 
 
@@ -223,6 +288,12 @@ def test_prompt_unknown_challenge_is_not_found() -> None:
             params={"challenge_id": "missing", "prompt": "ข้อความ"},
         )
         assert generating.status_code == 404
+
+        result = client.get(
+            "/rounds/demo/result",
+            params={"challenge_id": "missing", "prompt": "ข้อความ"},
+        )
+        assert result.status_code == 404
 
         continue_response = client.post(
             "/rounds/demo/challenge/continue",
