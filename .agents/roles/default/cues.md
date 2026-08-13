@@ -73,3 +73,6 @@ discoveries, patterns, problems, and next-step context.
 | `workers>single-outcome-executors manager-owns-coordination` | 2026-08-13T18:02:28+07:00 |
 | `workers>stateful-owned-tmux keep-until-accepted then-clean` | 2026-08-13T18:09:11+07:00 |
 | `worktrees>persistent-kus-sibling never-tmp` | 2026-08-13T18:10:38+07:00 |
+| `release>functional-skeleton verified-pass 161-tests chrome-flow` | 2026-08-13T23:16:00+07:00 |
+| `concurrency>claims-live-lease snapshot-cas cancellation-settle-cleanup` | 2026-08-13T23:16:00+07:00 |
+| `leaderboard>max-four-current-visible server-deadline` | 2026-08-13T23:16:00+07:00 |
