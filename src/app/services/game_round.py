@@ -24,6 +24,7 @@ from app.domain.models import (
     AttemptClaim,
     ChallengeSpec,
     ChallengeStatus,
+    FailureDetail,
     GameState,
     LevelGroup,
     PipelineResultStatus,
@@ -71,6 +72,8 @@ _PROMPT_DEADLINE = timedelta(seconds=90)
 _REVEAL_DURATION = timedelta(seconds=5)
 _DEFAULT_CLAIM_LEASE = timedelta(seconds=30)
 _DEFAULT_PROVIDER_TIMEOUT = 10.0
+_PROVIDER_TIMEOUT_CODE = "provider_timeout"
+_PROVIDER_TIMEOUT_MESSAGE = "การประมวลผล AI ใช้เวลานานเกินไป"
 _MAX_DISPLAY_NAME_LENGTH = 30
 _MAX_PROMPT_LENGTH = 1000
 _ANONYMOUS_NAME = "นิรนาม"
@@ -261,7 +264,20 @@ class GameRoundService:
         except RoundNotClaimableError as error:
             raise GameRoundConflictError(f"cannot generate from {record.state.value}") from error
 
-        result = await pipeline.run(challenge, prompt, timeout=self._provider_timeout)
+        try:
+            result = await asyncio.wait_for(
+                pipeline.run(challenge, prompt, timeout=self._provider_timeout),
+                timeout=self._provider_timeout,
+            )
+        except TimeoutError:
+            result = AIPipelineResult(
+                status=PipelineResultStatus.ERROR,
+                failure=FailureDetail(
+                    code=_PROVIDER_TIMEOUT_CODE,
+                    message=_PROVIDER_TIMEOUT_MESSAGE,
+                    retryable=True,
+                ),
+            )
         if not isinstance(result, AIPipelineResult):
             raise GameRoundValidationError("pipeline returned an invalid result")
 

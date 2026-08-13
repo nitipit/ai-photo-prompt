@@ -92,15 +92,16 @@ class RetryPipeline:
 
 
 class BlockingPipeline:
-    def __init__(self) -> None:
+    def __init__(self, expected_timeout: float = 10.0) -> None:
         self.calls = 0
+        self.expected_timeout = expected_timeout
         self.started = asyncio.Event()
         self.release = asyncio.Event()
 
     async def run(self, challenge: ChallengeSpec, prompt: str, timeout: float) -> AIPipelineResult:
         self.calls += 1
         assert prompt == "เด็กวาดภาพในสวน"
-        assert timeout == 10.0
+        assert timeout == self.expected_timeout
         self.started.set()
         await self.release.wait()
         return success_result(challenge)
@@ -172,7 +173,9 @@ def setup(tmp_path: Path):
         db.close()
 
 
-def service_for(repository, claims, clock, pipeline=None) -> GameRoundService:
+def service_for(
+    repository, claims, clock, pipeline=None, provider_timeout=10.0
+) -> GameRoundService:
     return GameRoundService(
         repository,
         make_catalog(),
@@ -181,6 +184,7 @@ def service_for(repository, claims, clock, pipeline=None) -> GameRoundService:
         generation_claims=claims,
         pipeline=pipeline if pipeline is not None else FakeAIPipeline(),
         owner_instance="test-worker",
+        provider_timeout=provider_timeout,
     )
 
 
@@ -241,6 +245,28 @@ async def test_failure_remains_generating_and_retry_is_available(setup) -> None:
     assert failed.feedback == []
     assert failed.completed_at is None
     assert retried.state is GameState.GENERATED_REVEAL
+    assert pipeline.calls == 2
+    assert claims.get(generating.id) is None
+
+
+@pytest.mark.asyncio
+async def test_pipeline_timeout_is_a_retryable_failure_and_releases_claim(setup) -> None:
+    repository, claims, clock = setup
+    pipeline = BlockingPipeline(expected_timeout=0.01)
+    service = service_for(repository, claims, clock, pipeline, provider_timeout=0.01)
+    generating = await prepare_generating(service)
+
+    timed_out = await service.generate_round(generating.id)
+    retried = await service.generate_round(generating.id)
+
+    assert timed_out.state is GameState.GENERATING
+    assert timed_out.pipeline_failure is not None
+    assert timed_out.pipeline_failure.code == "provider_timeout"
+    assert timed_out.pipeline_failure.retryable is True
+    assert timed_out.generated_artifact is None
+    assert timed_out.score is None
+    assert claims.get(generating.id) is None
+    assert retried.state is GameState.GENERATING
     assert pipeline.calls == 2
     assert claims.get(generating.id) is None
 
