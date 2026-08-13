@@ -37,7 +37,6 @@ DEMO_FEEDBACK = (
     ("strength", "เลือกสีและบรรยากาศได้ตรงโจทย์"),
     ("improvement", "ลองเพิ่มรายละเอียดตำแหน่งของสิ่งต่าง ๆ"),
 )
-DEMO_LEADERBOARD_LEVEL = LevelGroup.P1_P3
 DEMO_CURRENT_RANK = 2
 # Fixed rows keep this visible checkpoint deterministic; no ranking is computed here.
 DEMO_LEADERBOARD_ROWS = (
@@ -280,15 +279,15 @@ async def continue_demo_leaderboard(
     challenge_id: str = Form(...),
     prompt: str = Form(...),
     score: int = Form(...),
-    level: str = Form(default=DEMO_LEADERBOARD_LEVEL.value),
+    level: str | None = Form(default=None),
 ) -> RedirectResponse:
     """Validate the fixed demo result before the temporary Leaderboard scene."""
 
     _require_demo_round(round_id)
     challenge = _get_challenge(challenge_id)
-    _validate_leaderboard_context(challenge, prompt, score, level)
+    selected_level = _validate_leaderboard_context(challenge, prompt, score, level)
     return RedirectResponse(
-        url=_leaderboard_url(round_id, challenge_id, prompt, score, level),
+        url=_leaderboard_url(round_id, challenge_id, prompt, score, selected_level.value),
         status_code=303,
     )
 
@@ -327,15 +326,23 @@ async def leaderboard_scene(
     )
 
 
-def _validate_leaderboard_context(challenge, prompt: str, score: int, level: str) -> LevelGroup:
+def _validate_leaderboard_context(
+    challenge,
+    prompt: str,
+    score: int,
+    level: str | None,
+) -> LevelGroup:
     _validate_prompt(prompt)
     if score != DEMO_SCORE:
         raise HTTPException(status_code=422, detail="Score does not match the demo result")
+    selected_level = challenge.level
+    if level is None:
+        return selected_level
     try:
-        selected_level = LevelGroup(level)
+        requested_level = LevelGroup(level)
     except ValueError as error:
         raise HTTPException(status_code=422, detail="Unknown leaderboard level") from error
-    if selected_level != DEMO_LEADERBOARD_LEVEL or challenge.level != selected_level:
+    if requested_level != selected_level:
         raise HTTPException(status_code=422, detail="Leaderboard context does not match the demo")
     return selected_level
 

@@ -304,6 +304,32 @@ def test_leaderboard_redirects_with_encoded_context_and_rejects_tampering() -> N
         assert "level=p1-p3" in fallback_form.headers["location"]
 
 
+def test_leaderboard_derives_level_from_non_p1_challenge() -> None:
+    prompt = "มังกรผู้รักษาประตูยืนหน้าประตูฟุตบอล"
+    with TestClient(app) as client:
+        redirect = client.post(
+            "/rounds/demo/result/leaderboard",
+            data={
+                "challenge_id": "p4-p6-01",
+                "prompt": prompt,
+                "score": "82",
+            },
+            follow_redirects=False,
+        )
+
+        assert redirect.status_code == 303
+        location = urlsplit(redirect.headers["location"])
+        assert parse_qs(location.query)["level"] == ["p4-p6"]
+
+        leaderboard = client.get(redirect.headers["location"])
+        assert leaderboard.status_code == 200
+        assert 'data-leaderboard-level="p4-p6"' in leaderboard.text
+        assert "ระดับ p4-p6" in leaderboard.text
+        assert "รอบนี้ได้อันดับ 2" in leaderboard.text
+        assert "มังกรผู้รักษาประตูยืนหน้าประตูฟุตบอล" in leaderboard.text
+        assert re.findall(r'data-entry-rank="(\d+)"', leaderboard.text) == ["1", "2", "2", "4"]
+
+
 def test_leaderboard_renders_competition_tie_current_prompt_and_ready_fallback() -> None:
     prompt = "กระต่ายเชฟ & สีฟ้า + 50%"
     with TestClient(app) as client:
