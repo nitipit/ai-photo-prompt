@@ -1,14 +1,21 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from pathlib import Path
+from threading import Barrier
 from uuid import uuid4
 
 import pytest
 from shelfdb.shelf import DB  # type: ignore[import-untyped]
 
 from app.domain.models import GameState, LevelGroup, RoundRecord, TerminalDisposition
-from app.persistence import RoundConflictError, RoundNotFoundError, ShelfDbRoundRepository
+from app.persistence import (
+    RoundConflictError,
+    RoundNotFoundError,
+    RoundSnapshotConflictError,
+    ShelfDbRoundRepository,
+)
 
 FIXED_TIMESTAMP = datetime(2026, 1, 1, tzinfo=UTC).isoformat()
 
@@ -69,6 +76,55 @@ def test_duplicate_create_and_missing_operations_raise_focused_errors(
         repository.get(str(uuid4()))
     with pytest.raises(RoundNotFoundError):
         repository.replace(make_round())
+
+
+def test_compare_and_swap_rejects_a_stale_snapshot(repository: ShelfDbRoundRepository) -> None:
+    original = make_round(level=LevelGroup.P1_P3)
+    repository.create(original)
+    replacement = RoundRecord(
+        **{
+            **original.dict(),
+            "state": GameState.CHALLENGE_REVEAL,
+            "level": LevelGroup.M4_M6,
+        }
+    )
+    changed = RoundRecord(**{**original.dict(), "state": GameState.CHALLENGE_REVEAL})
+    repository.replace_unsafe(changed)
+
+    with pytest.raises(RoundSnapshotConflictError):
+        repository.replace_if_current(replacement, original)
+
+    assert repository.get(original.id).dict() == changed.dict()
+
+
+def test_compare_and_swap_allows_only_one_of_ten_same_snapshot_writers(
+    repository: ShelfDbRoundRepository,
+) -> None:
+    original = make_round()
+    repository.create(original)
+    barrier = Barrier(10)
+
+    def attempt(index: int) -> str:
+        replacement = RoundRecord(
+            **{
+                **original.dict(),
+                "state": GameState.CHALLENGE_REVEAL,
+                "display_name": f"Player {index}",
+            }
+        )
+        barrier.wait()
+        try:
+            repository.replace_if_current(replacement, original)
+        except RoundSnapshotConflictError:
+            return "stale"
+        return "stored"
+
+    with ThreadPoolExecutor(max_workers=10) as executor:
+        outcomes = list(executor.map(attempt, range(10)))
+
+    assert outcomes.count("stored") == 1
+    assert outcomes.count("stale") == 9
+    assert repository.get(original.id).state is GameState.CHALLENGE_REVEAL
 
 
 def test_replace_is_a_full_replacement(repository: ShelfDbRoundRepository) -> None:

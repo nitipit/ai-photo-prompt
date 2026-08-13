@@ -40,7 +40,10 @@ from app.persistence.claims import (
     ShelfDbGenerationClaims,
     StaleAttemptTokenError,
 )
-from app.persistence.rounds import ShelfDbRoundRepository
+from app.persistence.rounds import (
+    RoundSnapshotConflictError,
+    ShelfDbRoundRepository,
+)
 
 
 class GameRoundValidationError(ValueError):
@@ -146,7 +149,7 @@ class GameRoundService:
         candidates = self._catalog.for_level(selected_level)
         challenge = self._select_challenge(candidates, selected_level)
 
-        machine = RoundStateMachine.from_record(record)
+        machine = RoundStateMachine.from_record(RoundRecord(record.dict()))
         self._transition(
             machine,
             lambda: machine.configure(challenge_valid=True),
@@ -160,14 +163,14 @@ class GameRoundService:
             challenge_id=challenge.id,
             updated_at=timestamp,
         )
-        await asyncio.to_thread(self._repository.replace, replacement)
+        await self._replace_current(record, replacement, "configure")
         return replacement
 
     async def continue_challenge(self, round_id: str) -> RoundRecord:
         """Enter prompt entry and start the authoritative ninety-second deadline."""
 
         record = await self._get_record(round_id)
-        machine = RoundStateMachine.from_record(record)
+        machine = RoundStateMachine.from_record(RoundRecord(record.dict()))
         self._transition(machine, machine.continue_challenge, "continue_challenge")
         timestamp = self._timestamp()
         deadline = (self._as_datetime(timestamp) + _PROMPT_DEADLINE).isoformat()
@@ -177,7 +180,7 @@ class GameRoundService:
             prompt_deadline=deadline,
             updated_at=timestamp,
         )
-        await asyncio.to_thread(self._repository.replace, replacement)
+        await self._replace_current(record, replacement, "continue challenge")
         return replacement
 
     async def submit_prompt(
@@ -213,7 +216,7 @@ class GameRoundService:
         else:
             persisted_reason = PromptSubmissionReason.TIMEOUT
 
-        machine = RoundStateMachine.from_record(record)
+        machine = RoundStateMachine.from_record(RoundRecord(record.dict()))
         if blank and deadline_elapsed:
             self._transition(
                 machine,
@@ -241,7 +244,7 @@ class GameRoundService:
                 updated_at=timestamp,
             )
 
-        await asyncio.to_thread(self._repository.replace, replacement)
+        await self._replace_current(record, replacement, "submit prompt")
         return replacement
 
     async def generate_round(self, round_id: str) -> RoundRecord:
@@ -292,7 +295,7 @@ class GameRoundService:
         claims = self._require_claims()
         record = await self._get_record(round_id)
         self._generation_context(record)
-        machine = RoundStateMachine.from_record(record)
+        machine = RoundStateMachine.from_record(RoundRecord(record.dict()))
         self._transition(machine, machine.abandon_generation, "abandon_generation")
 
         timestamp = self._timestamp()
@@ -311,7 +314,14 @@ class GameRoundService:
             generated_at=None,
             completed_at=timestamp,
         )
-        await asyncio.to_thread(claims.replace_round_and_clear_claim, replacement)
+        try:
+            await asyncio.to_thread(
+                claims.replace_round_and_clear_claim,
+                replacement,
+                expected=record,
+            )
+        except RoundSnapshotConflictError as error:
+            raise GameRoundConflictError("generation round is stale") from error
         return replacement
 
     async def get_round(self, round_id: str) -> RoundRecord:
@@ -330,7 +340,7 @@ class GameRoundService:
         timestamp = self._timestamp()
         self._require_elapsed_reveal_deadline(record, timestamp)
 
-        machine = RoundStateMachine.from_record(record)
+        machine = RoundStateMachine.from_record(RoundRecord(record.dict()))
         self._transition(
             machine,
             lambda: machine.reveal_elapsed(deadline_elapsed=True),
@@ -341,7 +351,7 @@ class GameRoundService:
             state=machine.state_value,
             updated_at=timestamp,
         )
-        await asyncio.to_thread(self._repository.replace, replacement)
+        await self._replace_current(record, replacement, "show result")
         return replacement
 
     async def complete_round(self, round_id: str) -> RoundRecord:
@@ -357,7 +367,7 @@ class GameRoundService:
         if record.prompt is None or not record.prompt.strip():
             raise GameRoundValidationError("result round is missing prompt")
 
-        machine = RoundStateMachine.from_record(record)
+        machine = RoundStateMachine.from_record(RoundRecord(record.dict()))
         self._transition(
             machine,
             lambda: machine.show_leaderboard(completed=True),
@@ -372,7 +382,7 @@ class GameRoundService:
             updated_at=timestamp,
             leaderboard_deadline=(self._as_datetime(timestamp) + _LEADERBOARD_DURATION).isoformat(),
         )
-        await asyncio.to_thread(self._repository.replace, replacement)
+        await self._replace_current(record, replacement, "complete round")
         return replacement
 
     async def get_leaderboard(self, round_id: str) -> LeaderboardProjection:
@@ -455,7 +465,7 @@ class GameRoundService:
         ):
             raise GameRoundValidationError("pipeline success result is incomplete")
 
-        machine = RoundStateMachine.from_record(record)
+        machine = RoundStateMachine.from_record(RoundRecord(record.dict()))
         self._transition(
             machine,
             lambda: machine.pipeline_succeeded(pipeline_valid=True),
@@ -480,6 +490,7 @@ class GameRoundService:
             replacement,
             claim.attempt_token,
             timestamp,
+            record,
         )
         return replacement
 
@@ -495,7 +506,7 @@ class GameRoundService:
         if result.failure is None:
             raise GameRoundValidationError("pipeline failure result is incomplete")
 
-        machine = RoundStateMachine.from_record(record)
+        machine = RoundStateMachine.from_record(RoundRecord(record.dict()))
         self._transition(machine, machine.pipeline_failed, "pipeline_failed")
         timestamp = self._timestamp()
         replacement = self._replacement(
@@ -518,6 +529,7 @@ class GameRoundService:
             replacement,
             claim.attempt_token,
             timestamp,
+            record,
         )
         return replacement
 
@@ -527,6 +539,7 @@ class GameRoundService:
         record: RoundRecord,
         attempt_token: str,
         now: str,
+        expected: RoundRecord,
     ) -> None:
         try:
             await asyncio.to_thread(
@@ -534,8 +547,9 @@ class GameRoundService:
                 record,
                 attempt_token,
                 now,
+                expected=expected,
             )
-        except StaleAttemptTokenError as error:
+        except (RoundSnapshotConflictError, StaleAttemptTokenError) as error:
             raise GameRoundConflictError("generation attempt is stale") from error
 
     def _require_generation_dependencies(
@@ -646,6 +660,21 @@ class GameRoundService:
             raise GameRoundValidationError(
                 "claim lease duration must be longer than provider timeout"
             )
+
+    async def _replace_current(
+        self,
+        expected: RoundRecord,
+        replacement: RoundRecord,
+        event: str,
+    ) -> None:
+        try:
+            await asyncio.to_thread(
+                self._repository.replace_if_current,
+                replacement,
+                expected,
+            )
+        except RoundSnapshotConflictError as error:
+            raise GameRoundConflictError(f"cannot {event}: round snapshot is stale") from error
 
     async def _get_record(self, round_id: str) -> RoundRecord:
         try:

@@ -49,6 +49,10 @@ class RecordingRepository:
         self.calls.append(("replace", get_ident()))
         self.repository.replace(record)
 
+    def replace_if_current(self, record, expected) -> None:
+        self.calls.append(("replace_if_current", get_ident()))
+        self.repository.replace_if_current(record, expected)
+
 
 def make_catalog() -> ChallengeCatalog:
     challenges = []
@@ -331,9 +335,9 @@ async def test_repository_operations_run_off_event_loop_thread(setup) -> None:
     assert [name for name, _thread in recording.calls] == [
         "create",
         "get",
-        "replace",
+        "replace_if_current",
         "get",
-        "replace",
+        "replace_if_current",
         "get",
     ]
     assert all(thread != event_loop_thread for _name, thread in recording.calls)

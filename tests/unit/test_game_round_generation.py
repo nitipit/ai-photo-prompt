@@ -59,6 +59,10 @@ class RecordingRepository:
         self.calls.append(("replace", get_ident()))
         self.repository.replace(record)
 
+    def replace_if_current(self, record: RoundRecord, expected: RoundRecord) -> None:
+        self.calls.append(("replace_if_current", get_ident()))
+        self.repository.replace_if_current(record, expected)
+
 
 class RecordingClaims:
     def __init__(self, claims: ShelfDbGenerationClaims) -> None:
@@ -69,13 +73,18 @@ class RecordingClaims:
         self.calls.append(("claim", get_ident()))
         return self.claims.claim(round_id, claim, now)
 
-    def replace_round_and_release(self, record, attempt_token, now):
+    def replace_round_and_release(self, record, attempt_token, now, *, expected=None):
         self.calls.append(("replace_round_and_release", get_ident()))
-        return self.claims.replace_round_and_release(record, attempt_token, now)
+        return self.claims.replace_round_and_release(
+            record,
+            attempt_token,
+            now,
+            expected=expected,
+        )
 
-    def replace_round_and_clear_claim(self, record):
+    def replace_round_and_clear_claim(self, record, *, expected=None):
         self.calls.append(("replace_round_and_clear_claim", get_ident()))
-        return self.claims.replace_round_and_clear_claim(record)
+        return self.claims.replace_round_and_clear_claim(record, expected=expected)
 
 
 class RetryPipeline:

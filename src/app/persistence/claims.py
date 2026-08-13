@@ -3,14 +3,18 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
-from threading import Lock
 from typing import Any
 
 from shelfdb.shelf import DB  # type: ignore[import-untyped]
 
 from app.domain.models import AttemptClaim, GameState, RoundRecord
 
-from .rounds import RoundNotFoundError
+from .rounds import (
+    _SHELFDB_WRITE_LOCK,
+    RoundNotFoundError,
+    RoundSnapshotConflictError,
+    _require_expected_snapshot,
+)
 
 _CLAIMS_SHELF = "attempt_claims"
 _ROUNDS_SHELF = "rounds"
@@ -34,7 +38,7 @@ class ShelfDbGenerationClaims:
     def __init__(self, db: DB) -> None:
         self._db = db
         # ShelfDB rejects overlapping top-level writers on one shared environment.
-        self._write_lock = Lock()
+        self._write_lock = _SHELFDB_WRITE_LOCK
         # Initialize the transient shelf so read-only operations work on an empty DB.
         with self._db.transaction(write=True) as transaction:
             transaction.shelf(_CLAIMS_SHELF)
@@ -129,14 +133,28 @@ class ShelfDbGenerationClaims:
         record: RoundRecord,
         attempt_token: str,
         now: str,
+        *,
+        expected: RoundRecord | None = None,
     ) -> None:
-        """Replace a round and delete its matching live claim atomically."""
+        """Replace a round and delete its matching live claim atomically.
+
+        Production generation paths pass the snapshot read before the provider
+        attempt.  ``expected=None`` is retained for focused repository setup and
+        compatibility with the lower-level claim utility tests.
+        """
 
         validated_record = _validate_record(record)
+        expected_snapshot = _validate_record(expected) if expected is not None else None
+        if expected_snapshot is not None and expected_snapshot.id != validated_record.id:
+            raise RoundSnapshotConflictError(
+                f"round snapshot does not match replacement ID: {validated_record.id}"
+            )
         now_value = _parse_utc_timestamp(now, "now")
         with self._write_lock, self._db.transaction(write=True) as transaction:
             round_shelf = transaction.shelf(_ROUNDS_SHELF)
-            _read_round(round_shelf, validated_record.id)
+            current = _read_round(round_shelf, validated_record.id)
+            if expected_snapshot is not None:
+                _require_expected_snapshot(current, expected_snapshot)
 
             claim_shelf = transaction.shelf(_CLAIMS_SHELF)
             _require_live_matching_claim(
@@ -148,13 +166,29 @@ class ShelfDbGenerationClaims:
             round_shelf.put(validated_record.id, validated_record.dict())
             claim_shelf.key(validated_record.id).delete()
 
-    def replace_round_and_clear_claim(self, record: RoundRecord) -> None:
-        """Replace a validated round and clear any current claim atomically."""
+    def replace_round_and_clear_claim(
+        self,
+        record: RoundRecord,
+        *,
+        expected: RoundRecord | None = None,
+    ) -> None:
+        """Replace a round and clear any current claim atomically.
+
+        Generation exit passes the snapshot read before its event.  The optional
+        form remains available to explicitly administrative cleanup/setup code.
+        """
 
         validated_record = _validate_record(record)
+        expected_snapshot = _validate_record(expected) if expected is not None else None
+        if expected_snapshot is not None and expected_snapshot.id != validated_record.id:
+            raise RoundSnapshotConflictError(
+                f"round snapshot does not match replacement ID: {validated_record.id}"
+            )
         with self._write_lock, self._db.transaction(write=True) as transaction:
             round_shelf = transaction.shelf(_ROUNDS_SHELF)
-            _read_round(round_shelf, validated_record.id)
+            current = _read_round(round_shelf, validated_record.id)
+            if expected_snapshot is not None:
+                _require_expected_snapshot(current, expected_snapshot)
             round_shelf.put(validated_record.id, validated_record.dict())
 
             claim_shelf = transaction.shelf(_CLAIMS_SHELF)

@@ -6,13 +6,19 @@ from .claims import (
     ShelfDbGenerationClaims,
     StaleAttemptTokenError,
 )
-from .rounds import RoundConflictError, RoundNotFoundError, ShelfDbRoundRepository
+from .rounds import (
+    RoundConflictError,
+    RoundNotFoundError,
+    RoundSnapshotConflictError,
+    ShelfDbRoundRepository,
+)
 
 __all__ = [
     "GenerationAlreadyRunningError",
     "RoundConflictError",
     "RoundNotClaimableError",
     "RoundNotFoundError",
+    "RoundSnapshotConflictError",
     "ShelfDbGenerationClaims",
     "ShelfDbRoundRepository",
     "StaleAttemptTokenError",

@@ -20,6 +20,7 @@ from app.persistence import (
     GenerationAlreadyRunningError,
     RoundNotClaimableError,
     RoundNotFoundError,
+    RoundSnapshotConflictError,
     ShelfDbGenerationClaims,
     ShelfDbRoundRepository,
     StaleAttemptTokenError,
@@ -236,6 +237,28 @@ def test_release_rejects_expired_claim_at_and_after_expiry(persistence, now: str
     with pytest.raises(StaleAttemptTokenError):
         claims.release(record.id, existing.attempt_token, now)
 
+    assert claims.get(record.id).dict() == existing.dict()
+
+
+def test_claim_coupled_replacement_rejects_a_stale_round_snapshot(persistence) -> None:
+    claims, rounds = persistence
+    record = make_round()
+    replacement = RoundRecord(**{**record.dict(), "state": GameState.GENERATED_REVEAL})
+    existing = make_claim()
+    rounds.create(record)
+    claims.claim(record.id, existing, NOW)
+    changed = RoundRecord(**{**record.dict(), "display_name": "Changed"})
+    rounds.replace_unsafe(changed)
+
+    with pytest.raises(RoundSnapshotConflictError):
+        claims.replace_round_and_release(
+            replacement,
+            existing.attempt_token,
+            NOW,
+            expected=record,
+        )
+
+    assert rounds.get(record.id).dict() == changed.dict()
     assert claims.get(record.id).dict() == existing.dict()
 
 
