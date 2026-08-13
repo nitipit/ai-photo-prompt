@@ -201,6 +201,47 @@ def test_replace_round_and_release_is_atomic(persistence) -> None:
     assert claims.get(record.id) is None
 
 
+def test_replace_round_and_clear_claim_works_without_an_attempt(persistence) -> None:
+    claims, rounds = persistence
+    record = make_round()
+    replacement = RoundRecord(**{**record.dict(), "state": GameState.ABANDONED})
+    rounds.create(record)
+
+    claims.replace_round_and_clear_claim(replacement)
+
+    assert rounds.get(record.id).dict() == replacement.dict()
+    assert claims.get(record.id) is None
+
+
+def test_replace_round_and_clear_claim_removes_active_attempt(persistence) -> None:
+    claims, rounds = persistence
+    record = make_round()
+    replacement = RoundRecord(**{**record.dict(), "state": GameState.ABANDONED})
+    existing = make_claim()
+    rounds.create(record)
+    claims.claim(record.id, existing, NOW)
+
+    claims.replace_round_and_clear_claim(replacement)
+
+    assert rounds.get(record.id).dict() == replacement.dict()
+    assert claims.get(record.id) is None
+
+
+def test_cleared_attempt_rejects_a_late_token_commit(persistence) -> None:
+    claims, rounds = persistence
+    record = make_round()
+    replacement = RoundRecord(**{**record.dict(), "state": GameState.ABANDONED})
+    existing = make_claim()
+    rounds.create(record)
+    claims.claim(record.id, existing, NOW)
+
+    claims.replace_round_and_clear_claim(replacement)
+
+    with pytest.raises(StaleAttemptTokenError):
+        claims.replace_round_and_release(record, existing.attempt_token)
+    assert rounds.get(record.id).dict() == replacement.dict()
+
+
 def test_stale_token_cannot_commit_after_claim_replacement(persistence) -> None:
     claims, rounds = persistence
     record = make_round()

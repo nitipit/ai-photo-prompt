@@ -122,6 +122,19 @@ class ShelfDbGenerationClaims:
             round_shelf.put(validated_record.id, validated_record.dict())
             claim_shelf.key(validated_record.id).delete()
 
+    def replace_round_and_clear_claim(self, record: RoundRecord) -> None:
+        """Replace a validated round and clear any current claim atomically."""
+
+        validated_record = _validate_record(record)
+        with self._write_lock, self._db.transaction(write=True) as transaction:
+            round_shelf = transaction.shelf(_ROUNDS_SHELF)
+            _read_round(round_shelf, validated_record.id)
+            round_shelf.put(validated_record.id, validated_record.dict())
+
+            claim_shelf = transaction.shelf(_CLAIMS_SHELF)
+            if _read_payload(claim_shelf, validated_record.id) is not None:
+                claim_shelf.key(validated_record.id).delete()
+
 
 def _read_payload(shelf: Any, key: str) -> Any | None:
     item = next(iter(shelf.key(key).items()), None)

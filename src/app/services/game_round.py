@@ -1,10 +1,10 @@
-"""Async orchestration for the setup and prompt-entry scenes of one round.
+"""Async orchestration for one round's setup and generation lifecycle.
 
-The service keeps repository operations synchronous and complete: every call to
-``ShelfDbRoundRepository`` runs in one ``asyncio.to_thread`` operation.  Domain
-state transitions remain owned by ``RoundStateMachine``; this module only
-supplies facts such as a selected challenge, a nonblank prompt, or an elapsed
-prompt deadline and persists the resulting full record.
+The service keeps repository and claim operations synchronous and complete:
+every ShelfDB call runs in one ``asyncio.to_thread`` operation.  Domain state
+transitions remain owned by ``RoundStateMachine``; this module supplies facts
+such as a selected challenge, a nonblank prompt, or a validated pipeline result
+and persists the resulting full record.
 """
 
 from __future__ import annotations
@@ -12,21 +12,31 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
+from math import isfinite
+from typing import Protocol
 from uuid import uuid4
 
 from statemachine.exceptions import TransitionNotAllowed
 
+from app.ai.results import AIPipelineResult
 from app.content.repository import ChallengeCatalog
 from app.domain.models import (
+    AttemptClaim,
     ChallengeSpec,
     ChallengeStatus,
     GameState,
     LevelGroup,
+    PipelineResultStatus,
     PromptSubmissionReason,
     RoundRecord,
     TerminalDisposition,
 )
 from app.domain.state import RoundStateMachine
+from app.persistence.claims import (
+    RoundNotClaimableError,
+    ShelfDbGenerationClaims,
+    StaleAttemptTokenError,
+)
 from app.persistence.rounds import ShelfDbRoundRepository
 
 
@@ -45,7 +55,22 @@ class GameRoundDeadlineError(ValueError):
 ChallengeSelector = Callable[[tuple[ChallengeSpec, ...]], ChallengeSpec]
 UtcClock = Callable[[], datetime]
 
+
+class AIPipelineRunner(Protocol):
+    """Async runner compatible with the local fake pipeline boundary."""
+
+    async def run(
+        self,
+        challenge: ChallengeSpec,
+        prompt: str,
+        timeout: float,
+    ) -> AIPipelineResult: ...
+
+
 _PROMPT_DEADLINE = timedelta(seconds=90)
+_REVEAL_DURATION = timedelta(seconds=5)
+_DEFAULT_CLAIM_LEASE = timedelta(seconds=30)
+_DEFAULT_PROVIDER_TIMEOUT = 10.0
 _MAX_DISPLAY_NAME_LENGTH = 30
 _MAX_PROMPT_LENGTH = 1000
 _ANONYMOUS_NAME = "นิรนาม"
@@ -67,11 +92,23 @@ class GameRoundService:
         catalog: ChallengeCatalog,
         challenge_selector: ChallengeSelector,
         utc_clock: UtcClock,
+        *,
+        generation_claims: ShelfDbGenerationClaims | None = None,
+        pipeline: AIPipelineRunner | None = None,
+        owner_instance: str | None = None,
+        claim_lease_duration: timedelta = _DEFAULT_CLAIM_LEASE,
+        provider_timeout: float = _DEFAULT_PROVIDER_TIMEOUT,
     ) -> None:
         self._repository = repository
         self._catalog = catalog
         self._challenge_selector = challenge_selector
         self._utc_clock = utc_clock
+        self._generation_claims = generation_claims
+        self._pipeline = pipeline
+        self._owner_instance = owner_instance
+        self._claim_lease_duration = claim_lease_duration
+        self._provider_timeout = provider_timeout
+        self._validate_generation_timing(claim_lease_duration, provider_timeout)
 
     async def create_round(self, display_name: str = "") -> RoundRecord:
         """Create a fresh round in level selection with normalized identity."""
@@ -203,10 +240,198 @@ class GameRoundService:
         await asyncio.to_thread(self._repository.replace, replacement)
         return replacement
 
+    async def generate_round(self, round_id: str) -> RoundRecord:
+        """Run one claimed provider attempt and persist its bounded outcome."""
+
+        claims, pipeline, owner_instance = self._require_generation_dependencies()
+        record = await self._get_record(round_id)
+        challenge, prompt = self._generation_context(record)
+
+        claimed_at = self._timestamp()
+        claim = AttemptClaim(
+            attempt_token=str(uuid4()),
+            owner_instance=owner_instance,
+            claimed_at=claimed_at,
+            lease_expires_at=(
+                self._as_datetime(claimed_at) + self._claim_lease_duration
+            ).isoformat(),
+        )
+        try:
+            await asyncio.to_thread(claims.claim, round_id, claim, claimed_at)
+        except RoundNotClaimableError as error:
+            raise GameRoundConflictError(f"cannot generate from {record.state.value}") from error
+
+        result = await pipeline.run(challenge, prompt, timeout=self._provider_timeout)
+        if not isinstance(result, AIPipelineResult):
+            raise GameRoundValidationError("pipeline returned an invalid result")
+
+        if result.status is PipelineResultStatus.SUCCESS:
+            return await self._persist_generation_success(record, result, claims, claim)
+        return await self._persist_generation_failure(record, result, claims, claim)
+
+    async def abandon_generation(self, round_id: str) -> RoundRecord:
+        """Atomically abandon generation and fence any late provider result."""
+
+        claims = self._require_claims()
+        record = await self._get_record(round_id)
+        self._generation_context(record)
+        machine = RoundStateMachine.from_record(record)
+        self._transition(machine, machine.abandon_generation, "abandon_generation")
+
+        timestamp = self._timestamp()
+        replacement = self._replacement(
+            record,
+            state=machine.state_value,
+            generated_artifact=None,
+            prompt_evaluation=None,
+            image_evaluation=None,
+            score=None,
+            pipeline_failure=None,
+            feedback=[],
+            terminal_disposition=TerminalDisposition.ABANDONED,
+            updated_at=timestamp,
+            reveal_deadline=None,
+            generated_at=None,
+            completed_at=timestamp,
+        )
+        await asyncio.to_thread(claims.replace_round_and_clear_claim, replacement)
+        return replacement
+
     async def get_round(self, round_id: str) -> RoundRecord:
         """Return the freshly reconstructed durable record for a round."""
 
         return await self._get_record(round_id)
+
+    async def _persist_generation_success(
+        self,
+        record: RoundRecord,
+        result: AIPipelineResult,
+        claims: ShelfDbGenerationClaims,
+        claim: AttemptClaim,
+    ) -> RoundRecord:
+        """Apply a validated successful pipeline result under its attempt token."""
+
+        if (
+            result.artifact is None
+            or result.prompt_evaluation is None
+            or result.image_evaluation is None
+            or result.score is None
+        ):
+            raise GameRoundValidationError("pipeline success result is incomplete")
+
+        machine = RoundStateMachine.from_record(record)
+        self._transition(
+            machine,
+            lambda: machine.pipeline_succeeded(pipeline_valid=True),
+            "pipeline_succeeded",
+        )
+        timestamp = self._timestamp()
+        replacement = self._replacement(
+            record,
+            state=machine.state_value,
+            generated_artifact=result.artifact,
+            prompt_evaluation=result.prompt_evaluation,
+            image_evaluation=result.image_evaluation,
+            score=result.score,
+            pipeline_failure=None,
+            feedback=list(result.feedback),
+            updated_at=timestamp,
+            generated_at=timestamp,
+            reveal_deadline=(self._as_datetime(timestamp) + _REVEAL_DURATION).isoformat(),
+        )
+        await self._replace_and_release(claims, replacement, claim.attempt_token)
+        return replacement
+
+    async def _persist_generation_failure(
+        self,
+        record: RoundRecord,
+        result: AIPipelineResult,
+        claims: ShelfDbGenerationClaims,
+        claim: AttemptClaim,
+    ) -> RoundRecord:
+        """Persist only a safe bounded failure and release the attempt token."""
+
+        if result.failure is None:
+            raise GameRoundValidationError("pipeline failure result is incomplete")
+
+        machine = RoundStateMachine.from_record(record)
+        self._transition(machine, machine.pipeline_failed, "pipeline_failed")
+        timestamp = self._timestamp()
+        replacement = self._replacement(
+            record,
+            state=machine.state_value,
+            generated_artifact=None,
+            prompt_evaluation=None,
+            image_evaluation=None,
+            score=None,
+            pipeline_failure=result.failure,
+            feedback=[],
+            updated_at=timestamp,
+            reveal_deadline=None,
+            generated_at=None,
+            completed_at=None,
+            terminal_disposition=None,
+        )
+        await self._replace_and_release(claims, replacement, claim.attempt_token)
+        return replacement
+
+    async def _replace_and_release(
+        self,
+        claims: ShelfDbGenerationClaims,
+        record: RoundRecord,
+        attempt_token: str,
+    ) -> None:
+        try:
+            await asyncio.to_thread(claims.replace_round_and_release, record, attempt_token)
+        except StaleAttemptTokenError as error:
+            raise GameRoundConflictError("generation attempt is stale") from error
+
+    def _require_generation_dependencies(
+        self,
+    ) -> tuple[ShelfDbGenerationClaims, AIPipelineRunner, str]:
+        if (
+            self._generation_claims is None
+            or self._pipeline is None
+            or self._owner_instance is None
+            or not self._owner_instance.strip()
+        ):
+            raise GameRoundValidationError("generation dependencies are not configured")
+        return self._generation_claims, self._pipeline, self._owner_instance
+
+    def _require_claims(self) -> ShelfDbGenerationClaims:
+        if self._generation_claims is None:
+            raise GameRoundValidationError("generation claims are not configured")
+        return self._generation_claims
+
+    def _generation_context(self, record: RoundRecord) -> tuple[ChallengeSpec, str]:
+        if record.state is not GameState.GENERATING or record.terminal_disposition is not None:
+            raise GameRoundConflictError(f"cannot generate from {record.state.value}")
+        if not record.challenge_id or record.prompt is None or not record.prompt.strip():
+            raise GameRoundValidationError("generating round is missing challenge or prompt")
+        try:
+            challenge = self._catalog.get(record.challenge_id)
+        except KeyError as error:
+            raise GameRoundValidationError("generating round has an unknown challenge") from error
+        return challenge, record.prompt
+
+    @staticmethod
+    def _validate_generation_timing(
+        claim_lease_duration: timedelta,
+        provider_timeout: float,
+    ) -> None:
+        if not isinstance(claim_lease_duration, timedelta):
+            raise GameRoundValidationError("claim lease duration must be a timedelta")
+        if (
+            isinstance(provider_timeout, bool)
+            or not isinstance(provider_timeout, (int, float))
+            or not isfinite(provider_timeout)
+            or provider_timeout <= 0
+        ):
+            raise GameRoundValidationError("provider timeout must be a positive finite number")
+        if claim_lease_duration.total_seconds() <= provider_timeout:
+            raise GameRoundValidationError(
+                "claim lease duration must be longer than provider timeout"
+            )
 
     async def _get_record(self, round_id: str) -> RoundRecord:
         return await asyncio.to_thread(self._repository.get, round_id)
@@ -308,6 +533,7 @@ class GameRoundService:
 
 
 __all__ = [
+    "AIPipelineRunner",
     "ChallengeSelector",
     "GameRoundConflictError",
     "GameRoundDeadlineError",

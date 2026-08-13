@@ -1,6 +1,7 @@
 """Application services that coordinate domain events and persistence."""
 
 from .game_round import (
+    AIPipelineRunner,
     GameRoundConflictError,
     GameRoundDeadlineError,
     GameRoundService,
@@ -8,6 +9,7 @@ from .game_round import (
 )
 
 __all__ = [
+    "AIPipelineRunner",
     "GameRoundConflictError",
     "GameRoundDeadlineError",
     "GameRoundService",
