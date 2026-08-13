@@ -1,0 +1,57 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "photo-prompt"
+version = "0.1.0"
+description = "Photo Prompt kiosk game"
+requires-python = ">=3.12"
+dependencies = [
+  "dictify==5.0.2",
+  "fastapi>=0.115,<1",
+  "Jinja2>=3.1,<4",
+  "PyYAML>=6.0,<7",
+  "python-multipart>=0.0.9,<1",
+  "python-statemachine==3.2.0",
+  "shelfdb==3.0.1",
+  "uvicorn[standard]>=0.32,<1",
+]
+
+[dependency-groups]
+dev = [
+  "httpx>=0.27,<1",
+  "mypy>=1.13,<2",
+  "pytest>=8.3,<9",
+  "pytest-asyncio>=0.24,<1",
+  "ruff>=0.8,<1",
+  "types-PyYAML>=6.0,<7",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/app", "src/build"]
+
+[tool.pytest.ini_options]
+addopts = "-ra"
+pythonpath = ["src"]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.mypy]
+python_version = "3.12"
+check_untyped_defs = true
+disallow_any_generics = true
+no_implicit_optional = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+exclude = "(^|/)(tests|build)/"
+
+[[tool.mypy.overrides]]
+module = ["dictify"]
+ignore_missing_imports = true
