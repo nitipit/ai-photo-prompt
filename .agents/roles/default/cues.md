@@ -68,3 +68,4 @@ discoveries, patterns, problems, and next-step context.
 | `tmux>owned-aipp-fs-namespace-never-touch-other-teams` | 2026-08-13T17:00:03+07:00 |
 | `default>available-adaptive-watchdogs-management-context-only` | 2026-08-13T17:11:57+07:00 |
 | `architecture>functional-skeleton-contract-locked` | 2026-08-13T17:39:02+07:00 |
+| `delegation>coherent-15m-checkpoint split-over-25m` | 2026-08-13T17:54:36+07:00 |

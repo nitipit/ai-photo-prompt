@@ -57,6 +57,10 @@ transcripts or rebuilding their full context in the manager session.
   retain its concise conclusion rather than its full working context.
 - Give every worker a bounded goal, owned artifacts, constraints, dependencies,
   validation criteria, expected evidence, return path, and watchdog.
+- Size each delegation as one coherent outcome expected in about 15–20 minutes,
+  with a meaningful checkpoint by 15 minutes. Split work before dispatch when it
+  is likely to exceed 25 minutes; treat these as context-management targets, not
+  deadlines that justify interrupting a safe atomic change.
 - Track the task graph, keep one clear integration owner, and communicate changed
   assumptions or contracts to every affected owner.
 - Re-plan blocked or conflicting work promptly; do not let one stalled worker
