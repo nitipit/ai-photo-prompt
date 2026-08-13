@@ -168,6 +168,61 @@ async def test_manual_prompt_preserves_text_and_reason(setup) -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("offset_seconds", [-1, 0, 1], ids=["before", "exact", "after"])
+@pytest.mark.parametrize(
+    "reason",
+    [PromptSubmissionReason.MANUAL, PromptSubmissionReason.TIMEOUT],
+    ids=["manual", "timeout"],
+)
+@pytest.mark.parametrize("prompt", ["  ", "  timed prompt  "], ids=["blank", "nonblank"])
+async def test_prompt_deadline_authorizes_reason_and_blankness(
+    setup,
+    offset_seconds: int,
+    reason: PromptSubmissionReason,
+    prompt: str,
+) -> None:
+    repository, clock = setup
+    service = service_for(repository, clock)
+    created = await service.create_round()
+    await service.configure_round(created.id, LevelGroup.P1_P3)
+    continued = await service.continue_challenge(created.id)
+    assert continued.prompt_deadline is not None
+    before = (await service.get_round(created.id)).dict()
+    clock.current = datetime.fromisoformat(continued.prompt_deadline) + timedelta(
+        seconds=offset_seconds
+    )
+
+    if offset_seconds < 0 and reason is PromptSubmissionReason.MANUAL and prompt.strip():
+        submitted = await service.submit_prompt(created.id, prompt, reason)
+        assert submitted.state is GameState.GENERATING
+        assert submitted.prompt == prompt
+        assert submitted.prompt_submission_reason is PromptSubmissionReason.MANUAL
+        return
+
+    if offset_seconds < 0:
+        expected_error = (
+            GameRoundValidationError
+            if reason is PromptSubmissionReason.MANUAL
+            else GameRoundDeadlineError
+        )
+        with pytest.raises(expected_error):
+            await service.submit_prompt(created.id, prompt, reason)
+        assert (await service.get_round(created.id)).dict() == before
+        return
+
+    submitted = await service.submit_prompt(created.id, prompt, reason)
+    if prompt.strip():
+        assert submitted.state is GameState.GENERATING
+        assert submitted.prompt == prompt
+        assert submitted.prompt_submission_reason is PromptSubmissionReason.TIMEOUT
+    else:
+        assert submitted.state is GameState.ABANDONED
+        assert submitted.terminal_disposition is TerminalDisposition.ABANDONED
+        assert submitted.prompt is None
+        assert submitted.prompt_submission_reason is None
+
+
+@pytest.mark.asyncio
 async def test_timeout_nonblank_submits_after_authoritative_deadline(setup) -> None:
     repository, clock = setup
     service = service_for(repository, clock)
@@ -226,6 +281,24 @@ async def test_blank_manual_and_early_timeout_leave_stored_mapping_unchanged(set
         await service.submit_prompt(created.id, " \t", PromptSubmissionReason.TIMEOUT)
     assert (await service.get_round(created.id)).dict() == before
     assert continued.state is GameState.PROMPT_ENTRY
+
+
+@pytest.mark.asyncio
+async def test_missing_prompt_deadline_rejects_without_mutation(setup) -> None:
+    repository, clock = setup
+    service = service_for(repository, clock)
+    created = await service.create_round()
+    await service.configure_round(created.id, LevelGroup.P1_P3)
+    continued = await service.continue_challenge(created.id)
+    missing_deadline = continued.dict()
+    missing_deadline["prompt_deadline"] = None
+    repository.replace(type(continued)(missing_deadline))
+    before = (await service.get_round(created.id)).dict()
+
+    with pytest.raises(GameRoundDeadlineError, match="no prompt deadline"):
+        await service.submit_prompt(created.id, "valid", PromptSubmissionReason.MANUAL)
+
+    assert (await service.get_round(created.id)).dict() == before
 
 
 @pytest.mark.asyncio

@@ -52,7 +52,7 @@ class GameRoundConflictError(ValueError):
 
 
 class GameRoundDeadlineError(ValueError):
-    """Raised when a timeout submission is not authorized by its stored deadline."""
+    """Raised when a prompt submission cannot be authorized by its stored deadline."""
 
 
 ChallengeSelector = Callable[[tuple[ChallengeSpec, ...]], ChallengeSpec]
@@ -93,11 +93,10 @@ _ANONYMOUS_NAME = "นิรนาม"
 class GameRoundService:
     """Coordinate durable round setup without owning persistence transactions.
 
-    Manual prompt submissions are intentionally accepted whenever the persisted
-    state is ``prompt_entry``, even if their deadline has passed.  The simple
-    skeleton boundary treats only submissions explicitly marked ``timeout`` as
-    deadline-authorized; browser and server callers can therefore race without
-    making a manual submission unexpectedly fail.
+    The persisted prompt deadline authorizes every submission.  Before it elapses,
+    only a nonblank manual submission is accepted.  At or after it elapses, a
+    nonblank prompt is stored as a timeout submission and a blank prompt abandons
+    the round, regardless of the client-provided reason.
     """
 
     def __init__(
@@ -187,69 +186,60 @@ class GameRoundService:
         prompt: str,
         reason: PromptSubmissionReason | str,
     ) -> RoundRecord:
-        """Submit a prompt or atomically abandon a blank timeout.
+        """Submit a prompt or atomically abandon a blank elapsed submission.
 
         The raw prompt is retained for nonblank submissions; surrounding
-        whitespace is examined only to decide whether the prompt is blank.
-        ``timeout`` requires the injected clock to be at or after the persisted
-        prompt deadline, while ``manual`` follows the simple state-only boundary
-        documented on :class:`GameRoundService`.
+        whitespace is examined only to decide whether the prompt is blank.  The
+        persisted deadline, rather than the client-provided reason, decides
+        whether the result is manual, timeout, or abandonment.
         """
 
         prompt = self._validate_prompt(prompt)
         submission_reason = self._coerce_reason(reason)
         record = await self._get_record(round_id)
-        machine = RoundStateMachine.from_record(record)
+        self._require_state(record, GameState.PROMPT_ENTRY, "submit_prompt")
+        timestamp = self._timestamp()
+        deadline_elapsed = self._prompt_deadline_elapsed(record, timestamp)
         blank = not prompt.strip()
 
-        if submission_reason is PromptSubmissionReason.MANUAL:
+        if not deadline_elapsed:
+            if submission_reason is PromptSubmissionReason.TIMEOUT:
+                raise GameRoundDeadlineError("prompt deadline has not elapsed")
             if blank:
                 raise GameRoundValidationError("manual prompt must not be blank")
+            persisted_reason = PromptSubmissionReason.MANUAL
+        elif blank:
+            persisted_reason = None
+        else:
+            persisted_reason = PromptSubmissionReason.TIMEOUT
+
+        machine = RoundStateMachine.from_record(record)
+        if blank and deadline_elapsed:
+            self._transition(
+                machine,
+                lambda: machine.abandon_blank_timeout(blank=True),
+                "abandon_blank_timeout",
+            )
+            replacement = self._replacement(
+                record,
+                state=machine.state_value,
+                terminal_disposition=TerminalDisposition.ABANDONED,
+                updated_at=timestamp,
+                completed_at=timestamp,
+            )
+        else:
             self._transition(
                 machine,
                 lambda: machine.submit_prompt(prompt_valid=True),
                 "submit_prompt",
             )
-            timestamp = self._timestamp()
             replacement = self._replacement(
                 record,
                 state=machine.state_value,
                 prompt=prompt,
-                prompt_submission_reason=submission_reason,
+                prompt_submission_reason=persisted_reason,
                 updated_at=timestamp,
             )
-        else:
-            if blank:
-                self._transition(
-                    machine,
-                    lambda: machine.abandon_blank_timeout(blank=True),
-                    "abandon_blank_timeout",
-                )
-            else:
-                self._transition(
-                    machine,
-                    lambda: machine.submit_prompt(prompt_valid=True),
-                    "submit_prompt",
-                )
-
-            timestamp = self._timestamp()
-            self._require_elapsed_prompt_deadline(record, timestamp)
-            if blank:
-                replacement = self._replacement(
-                    record,
-                    state=machine.state_value,
-                    terminal_disposition=TerminalDisposition.ABANDONED,
-                    updated_at=timestamp,
-                    completed_at=timestamp,
-                )
-            else:
-                replacement = self._replacement(
-                    record,
-                    state=machine.state_value,
-                    prompt=prompt,
-                    prompt_submission_reason=submission_reason,
-                    updated_at=timestamp,
-                )
 
         await asyncio.to_thread(self._repository.replace, replacement)
         return replacement
@@ -761,11 +751,14 @@ class GameRoundService:
         return parsed.astimezone(UTC)
 
     @classmethod
-    def _require_elapsed_prompt_deadline(cls, record: RoundRecord, current: str) -> None:
+    def _prompt_deadline_elapsed(cls, record: RoundRecord, current: str) -> bool:
         if record.prompt_deadline is None:
             raise GameRoundDeadlineError("round has no prompt deadline")
-        if cls._as_datetime(current) < cls._as_datetime(record.prompt_deadline):
-            raise GameRoundDeadlineError("prompt deadline has not elapsed")
+        try:
+            deadline = cls._as_datetime(record.prompt_deadline)
+        except GameRoundValidationError as error:
+            raise GameRoundDeadlineError("round has a malformed prompt deadline") from error
+        return cls._as_datetime(current) >= deadline
 
 
 __all__ = [

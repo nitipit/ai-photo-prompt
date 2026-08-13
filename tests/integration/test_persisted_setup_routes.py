@@ -190,7 +190,33 @@ def test_blank_manual_and_early_blank_timeout_are_422_without_mutation(runtime_a
         assert current.terminal_disposition is None
 
 
-def test_elapsed_blank_timeout_abandons_round_using_service_clock(runtime_app) -> None:
+def test_early_timeout_nonblank_is_422_without_mutation(runtime_app) -> None:
+    with TestClient(runtime_app) as client:
+        round_id = _start_round(client)
+        _configure_round(client, round_id)
+        _continue_to_prompt(client, round_id)
+        before = _stored_record(runtime_app, round_id)
+
+        response = client.post(
+            f"/rounds/{round_id}/prompt",
+            data={"prompt": "auto submitted too early", "submission_reason": "timeout"},
+        )
+
+        assert response.status_code == 422
+        assert _stored_record(runtime_app, round_id).dict() == before.dict()
+
+
+@pytest.mark.parametrize("offset_seconds", [0, 1], ids=["exact", "after"])
+@pytest.mark.parametrize(
+    "submission_reason",
+    ["manual", "timeout"],
+    ids=["manual", "timeout"],
+)
+def test_elapsed_blank_submission_abandons_round_using_service_clock(
+    runtime_app,
+    offset_seconds: int,
+    submission_reason: str,
+) -> None:
     with TestClient(runtime_app) as client:
         round_id = _start_round(client)
         _configure_round(client, round_id)
@@ -198,12 +224,12 @@ def test_elapsed_blank_timeout_abandons_round_using_service_clock(runtime_app) -
         before_timeout = _stored_record(runtime_app, round_id)
         deadline = datetime.fromisoformat(before_timeout.prompt_deadline)
         runtime_app.state.game_round_service._utc_clock = lambda: (
-            deadline.astimezone(UTC) + timedelta(seconds=1)
+            deadline.astimezone(UTC) + timedelta(seconds=offset_seconds)
         )
 
         response = client.post(
             f"/rounds/{round_id}/prompt",
-            data={"prompt": "", "submission_reason": "timeout"},
+            data={"prompt": "", "submission_reason": submission_reason},
             follow_redirects=False,
         )
         assert response.status_code == 303
@@ -213,3 +239,39 @@ def test_elapsed_blank_timeout_abandons_round_using_service_clock(runtime_app) -
         assert abandoned.state is GameState.ABANDONED
         assert abandoned.terminal_disposition is TerminalDisposition.ABANDONED
         assert abandoned.completed_at is not None
+
+
+@pytest.mark.parametrize("offset_seconds", [0, 1], ids=["exact", "after"])
+@pytest.mark.parametrize(
+    "submission_reason",
+    ["manual", "timeout"],
+    ids=["manual", "timeout"],
+)
+def test_elapsed_nonblank_submission_is_timeout_for_any_reason(
+    runtime_app,
+    offset_seconds: int,
+    submission_reason: str,
+) -> None:
+    prompt_text = "  prompt after the deadline  "
+    with TestClient(runtime_app) as client:
+        round_id = _start_round(client)
+        _configure_round(client, round_id)
+        _continue_to_prompt(client, round_id)
+        before_timeout = _stored_record(runtime_app, round_id)
+        deadline = datetime.fromisoformat(before_timeout.prompt_deadline)
+        runtime_app.state.game_round_service._utc_clock = lambda: (
+            deadline.astimezone(UTC) + timedelta(seconds=offset_seconds)
+        )
+
+        response = client.post(
+            f"/rounds/{round_id}/prompt",
+            data={"prompt": prompt_text, "submission_reason": submission_reason},
+            follow_redirects=False,
+        )
+        assert response.status_code == 303
+        assert response.headers["location"] == f"/rounds/{round_id}/generating"
+
+        submitted = _stored_record(runtime_app, round_id)
+        assert submitted.state is GameState.GENERATING
+        assert submitted.prompt == prompt_text
+        assert submitted.prompt_submission_reason.value == "timeout"

@@ -220,7 +220,7 @@ async def submit_prompt(
     except GameRoundConflictError as error:
         raise HTTPException(status_code=409, detail=str(error)) from error
 
-    if not prompt.strip() and reason is PromptSubmissionReason.TIMEOUT:
+    if record.state is GameState.ABANDONED:
         return RedirectResponse(url="/", status_code=303)
     if record.challenge_id is None or record.prompt is None:
         raise HTTPException(status_code=409, detail="Submitted round is missing generation context")
