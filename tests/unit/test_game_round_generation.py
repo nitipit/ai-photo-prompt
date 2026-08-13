@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from threading import get_ident
+from threading import Event, get_ident
 from types import SimpleNamespace
 
 import pytest
@@ -149,6 +149,45 @@ class BlockingPipeline:
         self.started.set()
         await self.release.wait()
         return self.result if self.result is not None else success_result(challenge)
+
+
+class DelayedClaimBoundary:
+    def __init__(self, claims: ShelfDbGenerationClaims) -> None:
+        self.claims = claims
+        self.claim_started = Event()
+        self.allow_claim = Event()
+        self.claim_finished = Event()
+        self.delay_release = False
+        self.release_started = Event()
+        self.allow_release = Event()
+
+    def claim(self, round_id, claim, now):
+        self.claim_started.set()
+        self.allow_claim.wait(timeout=5)
+        try:
+            return self.claims.claim(round_id, claim, now)
+        finally:
+            self.claim_finished.set()
+
+    def get(self, round_id):
+        return self.claims.get(round_id)
+
+    def release_matching(self, round_id, attempt_token):
+        self.release_started.set()
+        if self.delay_release:
+            self.allow_release.wait(timeout=5)
+        return self.claims.release_matching(round_id, attempt_token)
+
+    def replace_round_and_release(self, record, attempt_token, now, *, expected=None):
+        return self.claims.replace_round_and_release(
+            record,
+            attempt_token,
+            now,
+            expected=expected,
+        )
+
+    def replace_round_and_clear_claim(self, record, *, expected=None):
+        return self.claims.replace_round_and_clear_claim(record, expected=expected)
 
 
 def make_catalog() -> ChallengeCatalog:
@@ -404,6 +443,62 @@ async def test_cancellation_releases_claim_preserves_round_and_allows_retry(setu
     retried = await service.generate_round(generating.id)
     assert retried.state is GameState.GENERATED_REVEAL
     assert pipeline.calls == 2
+    assert claims.get(generating.id) is None
+
+
+@pytest.mark.asyncio
+async def test_cancellation_waits_for_claim_acquisition_before_cleanup(setup) -> None:
+    repository, claims, clock = setup
+    delayed_claims = DelayedClaimBoundary(claims)
+    service = service_for(repository, delayed_claims, clock)
+    generating = await prepare_generating(service)
+    before = await service.get_round(generating.id)
+
+    attempt = asyncio.create_task(service.generate_round(generating.id))
+    assert await asyncio.to_thread(delayed_claims.claim_started.wait, 5)
+    attempt.cancel()
+
+    await asyncio.sleep(0)
+    with pytest.raises(asyncio.TimeoutError):
+        await asyncio.wait_for(asyncio.shield(attempt), timeout=0.05)
+
+    delayed_claims.allow_claim.set()
+    with pytest.raises(asyncio.CancelledError):
+        await attempt
+
+    assert delayed_claims.claim_finished.is_set()
+    assert claims.get(generating.id) is None
+    assert (await service.get_round(generating.id)).dict() == before.dict()
+
+    retried = await service.generate_round(generating.id)
+    assert retried.state is GameState.GENERATED_REVEAL
+    assert claims.get(generating.id) is None
+
+
+@pytest.mark.asyncio
+async def test_second_cancellation_waits_for_claim_cleanup(setup) -> None:
+    repository, claims, clock = setup
+    delayed_claims = DelayedClaimBoundary(claims)
+    pipeline = BlockingPipeline()
+    service = service_for(repository, delayed_claims, clock, pipeline)
+    generating = await prepare_generating(service)
+
+    attempt = asyncio.create_task(service.generate_round(generating.id))
+    assert await asyncio.to_thread(delayed_claims.claim_started.wait, 5)
+    delayed_claims.allow_claim.set()
+    await pipeline.started.wait()
+    delayed_claims.delay_release = True
+    attempt.cancel()
+    assert await asyncio.to_thread(delayed_claims.release_started.wait, 5)
+    attempt.cancel()
+
+    with pytest.raises(asyncio.TimeoutError):
+        await asyncio.wait_for(asyncio.shield(attempt), timeout=0.05)
+
+    delayed_claims.allow_release.set()
+    with pytest.raises(asyncio.CancelledError):
+        await attempt
+
     assert claims.get(generating.id) is None
 
 

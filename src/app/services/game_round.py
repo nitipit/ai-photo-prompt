@@ -281,12 +281,9 @@ class GameRoundService:
             ).isoformat(),
         )
         try:
-            await asyncio.to_thread(claims.claim, round_id, claim, claimed_at)
+            await self._acquire_generation_claim(claims, round_id, claim, claimed_at)
         except RoundNotClaimableError as error:
             raise GameRoundConflictError(f"cannot generate from {record.state.value}") from error
-        except asyncio.CancelledError:
-            await self._release_cancelled_attempt(claims, round_id, claim)
-            raise
 
         try:
             try:
@@ -614,6 +611,29 @@ class GameRoundService:
         )
         return replacement
 
+    async def _acquire_generation_claim(
+        self,
+        claims: ShelfDbGenerationClaims,
+        round_id: str,
+        claim: AttemptClaim,
+        claimed_at: str,
+    ) -> None:
+        """Settle acquisition before cancellation cleanup can inspect its claim."""
+
+        acquisition = asyncio.create_task(
+            asyncio.to_thread(claims.claim, round_id, claim, claimed_at)
+        )
+        try:
+            await asyncio.shield(acquisition)
+        except asyncio.CancelledError as cancellation:
+            acquisition_error = await self._settle_cancelled_task(acquisition)
+            if acquisition_error is None:
+                try:
+                    await self._release_cancelled_attempt(claims, round_id, claim)
+                except Exception as cleanup_error:
+                    raise cancellation from cleanup_error
+            raise
+
     async def _release_cancelled_attempt(
         self,
         claims: ShelfDbGenerationClaims,
@@ -622,17 +642,41 @@ class GameRoundService:
     ) -> None:
         """Release a token after cancellation without swallowing cancellation."""
 
-        try:
-            await asyncio.shield(
-                asyncio.to_thread(
-                    claims.release_matching,
-                    round_id,
-                    claim.attempt_token,
-                )
+        release = asyncio.create_task(
+            asyncio.to_thread(
+                claims.release_matching,
+                round_id,
+                claim.attempt_token,
             )
-        except StaleAttemptTokenError:
+        )
+        release_error = await self._settle_cancelled_task(release)
+        if isinstance(release_error, StaleAttemptTokenError):
             # A concurrent abandon or replacement already fenced this token.
-            pass
+            return
+        if release_error is not None:
+            raise release_error
+
+    @staticmethod
+    async def _settle_cancelled_task(task: asyncio.Task[object]) -> BaseException | None:
+        """Wait for a shielded worker despite repeated outer cancellation."""
+
+        while True:
+            if task.done():
+                try:
+                    task.result()
+                except asyncio.CancelledError as error:
+                    return error
+                except Exception as error:
+                    return error
+                return None
+            try:
+                await asyncio.shield(task)
+            except asyncio.CancelledError:
+                # Keep waiting: the worker thread must settle before cleanup or
+                # cancellation can complete.
+                continue
+            except Exception as error:
+                return error
 
     @staticmethod
     def _bounded_failure_result(code: str, message: str) -> AIPipelineResult:
