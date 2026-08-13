@@ -1,16 +1,24 @@
 """FastAPI entry point for the first visible Photo Prompt checkpoint."""
 
+import random
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime
+from pathlib import Path
 from urllib.parse import urlencode
+from uuid import uuid4
 
 from fastapi import FastAPI, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
+from shelfdb.shelf import DB  # type: ignore[import-untyped]
 
-from .config import DEMO_ROUND_ID, DIST_DIR
+from .ai import FakeAIPipeline
+from .config import DEFAULT_CATALOG_PATH, DEFAULT_DB_PATH, DEMO_ROUND_ID, DIST_DIR
 from .content.repository import CatalogValidationError, ChallengeCatalog
-from .domain.models import LevelGroup, PromptSubmissionReason
+from .domain.models import ChallengeSpec, LevelGroup, PromptSubmissionReason
+from .persistence import ShelfDbGenerationClaims, ShelfDbRoundRepository
+from .services import GameRoundService
 from .web import (
     render_challenge_reveal,
     render_generating,
@@ -23,10 +31,59 @@ from .web import (
 
 
 @asynccontextmanager
-async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
-    """Reserve the application lifecycle seam for later round services."""
+async def lifespan(application: FastAPI) -> AsyncIterator[None]:
+    """Own the one-process local runtime dependencies for the application."""
 
-    yield
+    catalog_path = Path(getattr(application.state, "catalog_path", DEFAULT_CATALOG_PATH))
+    db_path = Path(getattr(application.state, "db_path", DEFAULT_DB_PATH))
+    db: DB | None = None
+    try:
+        catalog = ChallengeCatalog.load(catalog_path)
+        db_path.parent.mkdir(parents=True, exist_ok=True)
+        db = DB(str(db_path))
+        round_repository = ShelfDbRoundRepository(db)
+        generation_claims = ShelfDbGenerationClaims(db)
+        game_round_service = GameRoundService(
+            round_repository,
+            catalog,
+            _select_challenge,
+            _utc_now,
+            generation_claims=generation_claims,
+            pipeline=FakeAIPipeline(),
+            owner_instance=str(uuid4()),
+        )
+        application.state.db = db
+        application.state.catalog = catalog
+        application.state.round_repository = round_repository
+        application.state.generation_claims = generation_claims
+        application.state.game_round_service = game_round_service
+        yield
+    finally:
+        try:
+            if db is not None:
+                db.close()
+        finally:
+            for name in (
+                "db",
+                "catalog",
+                "round_repository",
+                "generation_claims",
+                "game_round_service",
+            ):
+                if hasattr(application.state, name):
+                    delattr(application.state, name)
+
+
+def _select_challenge(candidates: tuple[ChallengeSpec, ...]) -> ChallengeSpec:
+    """Select one candidate independently for each service configure event."""
+
+    return random.choice(candidates)
+
+
+def _utc_now() -> datetime:
+    """Return the aware UTC clock used by the round service."""
+
+    return datetime.now(UTC)
 
 
 app = FastAPI(title="Photo Prompt", lifespan=lifespan)

@@ -1,0 +1,84 @@
+from __future__ import annotations
+
+import asyncio
+from pathlib import Path
+
+import pytest
+from fastapi.testclient import TestClient
+from shelfdb.shelf import DB  # type: ignore[import-untyped]
+
+from app.ai import FakeAIPipeline
+from app.content.repository import CatalogValidationError, ChallengeCatalog
+from app.domain.models import LevelGroup
+from app.persistence import ShelfDbGenerationClaims, ShelfDbRoundRepository
+from app.server import app
+from app.services import GameRoundService
+
+
+@pytest.fixture
+def runtime_app(tmp_path: Path, materialized_catalog):
+    app.state.db_path = tmp_path / "runtime.shelfdb"
+    app.state.catalog_path = materialized_catalog.catalog_path
+    yield app
+    for name in ("db_path", "catalog_path"):
+        if hasattr(app.state, name):
+            delattr(app.state, name)
+
+
+def test_lifespan_exposes_typed_runtime_state_and_closes_db(runtime_app) -> None:
+    with TestClient(runtime_app):
+        assert isinstance(runtime_app.state.db, DB)
+        assert isinstance(runtime_app.state.catalog, ChallengeCatalog)
+        assert isinstance(runtime_app.state.round_repository, ShelfDbRoundRepository)
+        assert isinstance(runtime_app.state.generation_claims, ShelfDbGenerationClaims)
+        assert isinstance(runtime_app.state.game_round_service, GameRoundService)
+        assert isinstance(runtime_app.state.game_round_service._pipeline, FakeAIPipeline)
+        db = runtime_app.state.db
+
+    for name in (
+        "db",
+        "catalog",
+        "round_repository",
+        "generation_claims",
+        "game_round_service",
+    ):
+        assert not hasattr(runtime_app.state, name)
+
+    with pytest.raises(Exception, match="closed"):
+        with db.transaction(write=False):
+            pass
+
+
+def test_service_round_survives_lifespan_reopen(runtime_app) -> None:
+    with TestClient(runtime_app):
+        service = runtime_app.state.game_round_service
+        created = asyncio.run(service.create_round("  น้องทดสอบ  "))
+        configured = asyncio.run(service.configure_round(created.id, LevelGroup.P1_P3))
+        assert configured.challenge_id is not None
+        stored_db = runtime_app.state.db
+
+    with pytest.raises(Exception, match="closed"):
+        with stored_db.transaction(write=False):
+            pass
+
+    with TestClient(runtime_app):
+        rebuilt = asyncio.run(runtime_app.state.game_round_service.get_round(created.id))
+
+    assert rebuilt.dict() == configured.dict()
+
+
+def test_missing_catalog_fails_startup_without_opening_db(tmp_path: Path) -> None:
+    db_path = tmp_path / "missing-catalog.shelfdb"
+    app.state.db_path = db_path
+    app.state.catalog_path = tmp_path / "missing-catalog.json"
+    try:
+        with pytest.raises(CatalogValidationError):
+            with TestClient(app):
+                pass
+
+        assert not db_path.exists()
+        assert not hasattr(app.state, "db")
+    finally:
+        for name in ("db_path", "catalog_path"):
+            if hasattr(app.state, name):
+                delattr(app.state, name)
