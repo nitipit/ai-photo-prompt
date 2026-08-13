@@ -20,6 +20,7 @@ from .models import (
     ScoreResult,
     TerminalDisposition,
 )
+from .scoring import score_image, score_prompt, score_total
 from .state import RoundStateMachine
 
 __all__ = [
@@ -42,4 +43,7 @@ __all__ = [
     "RoundStateMachine",
     "ScoreResult",
     "TerminalDisposition",
+    "score_image",
+    "score_prompt",
+    "score_total",
 ]
