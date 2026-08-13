@@ -88,15 +88,6 @@ endblock %} {% block content %}
           data-generated-artifact="true"
           data-provider="{{ generated_artifact.provider or '' }}"
         />
-        {% if generated_artifact.provider == "fake-ai" %}
-        <span
-          id="generating-provider-badge"
-          class="generating-placeholder-badge"
-          data-provider-label="fake-ai"
-        >
-          fake-ai · โหมดสาธิต
-        </span>
-        {% endif %}
       </div>
     </section>
 

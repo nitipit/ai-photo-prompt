@@ -154,10 +154,7 @@ def test_prompt_is_stored_exactly_and_generating_ignores_tampered_context(runtim
         assert submitted.status_code == 303
         location = urlsplit(submitted.headers["location"])
         assert location.path == f"/rounds/{round_id}/generating"
-        assert parse_qs(location.query) == {
-            "challenge_id": [selected.id],
-            "prompt": [prompt_text],
-        }
+        assert parse_qs(location.query) == {}
 
         stored = _stored_record(runtime_app, round_id)
         assert stored.state is GameState.GENERATING

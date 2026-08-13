@@ -3,7 +3,7 @@
 <main
   class="scene result-scene"
   data-scene="result"
-  data-result-data="deterministic-demo"
+  data-result-data="persisted-round-result"
 >
   <header class="scene-topbar">
     <a class="brand" href="/" aria-label="กลับหน้าพร้อมเล่น">
@@ -29,7 +29,7 @@
             src="{{ challenge.target_asset_url }}"
             alt="ภาพโจทย์สำหรับรอบนี้"
             data-result-image="target"
-            data-image-source="selected-target-asset"
+            data-image-source="stored-challenge-target"
           />
         </div>
         <figcaption>ภาพโจทย์</figcaption>
@@ -38,40 +38,33 @@
       <figure class="result-visual">
         <div
           class="result-frame result-generated-frame"
-          data-result-image="generated-placeholder"
-          data-temporary="true"
-          data-real-ai-output="false"
+          data-result-image="generated-artifact"
+          data-image-source="stored-generated-artifact"
         >
-          <!-- Temporary placeholder only: this is not real AI output. -->
           <img
             class="result-image"
-            src="{{ challenge.target_asset_url }}"
-            alt="ภาพตัวอย่างชั่วคราวจากคำสั่งของคุณ"
-            data-fake-generated-placeholder="true"
-            data-placeholder-source="selected-target-asset"
-            data-temporary="true"
-            data-real-ai-output="false"
+            src="{{ generated_artifact.url }}"
+            alt="ภาพที่สร้างจากคำสั่งของคุณ"
+            data-generated-artifact="true"
+            data-image-source="stored-generated-artifact"
+            data-pipeline-provider="{{ generated_artifact.provider or '' }}"
           />
-          <span class="result-placeholder-badge">
-            ภาพตัวอย่างชั่วคราว · ยังไม่ใช่ภาพ AI จริง
-          </span>
         </div>
-        <figcaption>ภาพตัวอย่างจากคำสั่ง</figcaption>
+        <figcaption>ภาพจากคำสั่งของคุณ</figcaption>
       </figure>
 
       <section
         class="result-summary"
         aria-labelledby="result-feedback-title"
-        data-demo-feedback="true"
-        data-feedback-source="deterministic-demo-data"
+        data-feedback-source="stored-round-feedback"
       >
-        <p class="result-score-kicker">คะแนนสาธิต</p>
-        <p class="result-score" aria-label="คะแนน 82 จาก 100">
-          <strong
-            id="result-score"
-            data-demo-score="82"
-            data-score-source="deterministic-demo-data"
-          >{{ score }}</strong>
+        <p class="result-score-kicker">คะแนนของคุณ</p>
+        <p
+          class="result-score"
+          aria-label="คะแนน {{ score.total_score }} จาก 100"
+          data-score-source="stored-round-score"
+        >
+          <strong id="result-score">{{ score.total_score }}</strong>
           <span>/ 100</span>
         </p>
         <h2 id="result-feedback-title" class="result-feedback-title">
@@ -87,13 +80,7 @@
 
     <div class="result-bottom-action">
       <p>พร้อมไปดูอันดับของคุณไหม?</p>
-      <form
-        action="/rounds/{{ round_id }}/result/leaderboard"
-        method="post"
-      >
-        <input type="hidden" name="challenge_id" value="{{ challenge.id }}" />
-        <input type="hidden" name="prompt" value="{{ prompt }}" />
-        <input type="hidden" name="score" value="{{ score }}" />
+      <form action="/rounds/{{ round_id }}/result/leaderboard" method="post">
         <kiosk-button>
           <button id="continue-result-button" type="submit">
             ดู Leaderboard <span aria-hidden="true">→</span>

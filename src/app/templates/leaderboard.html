@@ -3,9 +3,10 @@
 <main
   class="scene leaderboard-scene"
   data-scene="leaderboard"
-  data-leaderboard-data="deterministic-demo"
+  data-leaderboard-data="completed-round-projection"
   data-leaderboard-level="{{ level }}"
   data-current-round="{{ round_id }}"
+  data-leaderboard-deadline="{{ leaderboard_deadline }}"
 >
   <header class="scene-topbar">
     <a class="brand" href="/" aria-label="กลับหน้าพร้อมเล่น">
@@ -17,7 +18,7 @@
 
   <div class="leaderboard-layout">
     <section class="leaderboard-heading" aria-labelledby="leaderboard-title">
-      <p class="eyebrow">ระดับ {{ level }} · ข้อมูลสาธิตชั่วคราว</p>
+      <p class="eyebrow">ระดับ {{ level }}</p>
       <h1 id="leaderboard-title">
         อันดับคะแนน<br /><span>Leaderboard</span>
       </h1>
@@ -26,8 +27,8 @@
     <section
       class="leaderboard-current"
       aria-label="อันดับของรอบนี้"
-      data-current-entry="deterministic-demo"
-      data-entry-source="deterministic-demo-data"
+      data-current-entry="true"
+      data-entry-source="completed-round-record"
     >
       <p
         class="leaderboard-current-rank"
@@ -35,7 +36,11 @@
       >
         รอบนี้ได้อันดับ {{ current_rank }}
       </p>
-      <p class="leaderboard-current-score" data-current-score="{{ score }}">
+      <p
+        class="leaderboard-current-score"
+        data-current-score="{{ score }}"
+        data-score-source="completed-round-record"
+      >
         คะแนน {{ score }} / 100
       </p>
     </section>
@@ -43,15 +48,15 @@
     <ol
       class="leaderboard-list"
       aria-label="ตารางอันดับระดับ {{ level }}"
-      data-leaderboard-list="deterministic-demo-data"
-      data-ranking="competition-fixed-demo"
+      data-leaderboard-list="completed-round-projection"
+      data-ranking="competition-rank"
     >
       {% for entry in rows %}
       <li
         class="leaderboard-row{% if entry.is_current %} leaderboard-row-current{% endif %}"
-        data-leaderboard-entry="deterministic-demo"
+        data-leaderboard-entry="completed-round-projection"
         data-current-entry="{{ 'true' if entry.is_current else 'false' }}"
-        data-entry-source="deterministic-demo-data"
+        data-entry-source="completed-round-record"
       >
         <div class="leaderboard-rank" data-entry-rank="{{ entry.rank }}">
           อันดับ {{ entry.rank }}
@@ -59,14 +64,12 @@
         <div class="leaderboard-image-frame">
           <img
             class="leaderboard-image"
-            src="{{ entry.image_url }}"
-            alt="ภาพตัวอย่างชั่วคราวของ {{ entry.name }}"
+            src="{{ entry.generated_image.url }}"
+            alt="ภาพที่สร้างจากคำสั่งของ {{ entry.name }}"
             data-entry-image="true"
-            data-image-source="approved-challenge-target-placeholder"
-            data-temporary="true"
-            data-temporary-image-placeholder="true"
+            data-image-source="persisted-generated-artifact"
+            data-pipeline-provider="{{ entry.generated_image.provider or '' }}"
           />
-          <span class="leaderboard-image-badge">ชั่วคราว</span>
         </div>
         <div class="leaderboard-details">
           <strong class="leaderboard-name" data-entry-name="{{ entry.name }}">
@@ -87,12 +90,12 @@
     <div
       class="leaderboard-bottom-action"
       data-action-region="ready"
-      data-action-source="deterministic-demo"
+      data-action-source="completed-round-record"
     >
       <p>
         กลับหน้าพร้อมเล่นใน
-        <strong class="leaderboard-countdown" data-leaderboard-countdown="15"
-        >15</strong>
+        <strong class="leaderboard-countdown" data-leaderboard-countdown
+        >—</strong>
         วินาที
       </p>
       <a

@@ -29,27 +29,25 @@ def render_level_selection(request: Request, round_id: str):
 def render_leaderboard(
     request: Request,
     round_id: str,
-    challenge,
-    prompt: str,
     *,
-    score: int,
+    score: int | float,
     level: str,
     current_rank: int,
     rows,
+    leaderboard_deadline: str,
 ):
-    """Render the deterministic current-level leaderboard without persistence."""
+    """Render the completed-round leaderboard projection and deadline."""
 
     return templates.TemplateResponse(
         request=request,
         name="leaderboard.html",
         context={
             "round_id": round_id,
-            "challenge": challenge,
-            "prompt": prompt,
             "score": score,
             "level": level,
             "current_rank": current_rank,
             "rows": rows,
+            "leaderboard_deadline": leaderboard_deadline,
         },
     )
 
@@ -118,12 +116,12 @@ def render_result(
     request: Request,
     round_id: str,
     challenge,
-    prompt: str,
     *,
-    score: int,
+    generated_artifact: ImageArtifact,
+    score: ScoreResult,
     feedback: tuple[tuple[str, str], ...],
 ):
-    """Render deterministic demo feedback without implying real AI scoring."""
+    """Render the persisted result artifact, score, and feedback."""
 
     return templates.TemplateResponse(
         request=request,
@@ -131,7 +129,7 @@ def render_result(
         context={
             "round_id": round_id,
             "challenge": challenge,
-            "prompt": prompt,
+            "generated_artifact": generated_artifact,
             "score": score,
             "feedback": feedback,
         },

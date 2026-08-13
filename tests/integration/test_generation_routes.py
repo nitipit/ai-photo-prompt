@@ -119,7 +119,7 @@ def test_generation_failure_has_no_result_and_retry_runs_service_again(runtime_a
             ).status_code
             == 409
         )
-        assert client.get(f"/rounds/{round_id}/result").status_code == 422
+        assert client.get(f"/rounds/{round_id}/result").status_code == 409
 
         runtime_app.state.game_round_service._pipeline = FakeAIPipeline()
         retry = client.post(
