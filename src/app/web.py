@@ -4,7 +4,13 @@ from fastapi import Request
 from fastapi.templating import Jinja2Templates
 
 from .config import TEMPLATE_DIR
-from .domain.models import FailureDetail, GameState, ImageArtifact, ScoreResult
+from .domain.models import (
+    FailureDetail,
+    GameState,
+    GenerationStatusState,
+    ImageArtifact,
+    ScoreResult,
+)
 
 templates = Jinja2Templates(directory=TEMPLATE_DIR)
 templates.env.auto_reload = True
@@ -89,6 +95,7 @@ def render_generating(
     prompt: str,
     *,
     state: GameState,
+    generation_status: GenerationStatusState,
     failure: FailureDetail | None = None,
     generated_artifact: ImageArtifact | None = None,
     score: ScoreResult | None = None,
@@ -104,6 +111,7 @@ def render_generating(
             "challenge": challenge,
             "prompt": prompt,
             "generating_state": state.value,
+            "generation_status": generation_status.value,
             "failure": failure,
             "generated_artifact": generated_artifact,
             "score": score,

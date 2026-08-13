@@ -74,6 +74,10 @@ class RecordingClaims:
         self.calls.append(("claim", get_ident()))
         return self.claims.claim(round_id, claim, now)
 
+    def get(self, round_id):
+        self.calls.append(("get", get_ident()))
+        return self.claims.get(round_id)
+
     def replace_round_and_release(self, record, attempt_token, now, *, expected=None):
         self.calls.append(("replace_round_and_release", get_ident()))
         return self.claims.replace_round_and_release(
@@ -527,10 +531,12 @@ async def test_repository_and_claims_operations_run_off_event_loop_thread(setup)
     event_loop_thread = get_ident()
 
     generating = await prepare_generating(service)
+    assert (await service.get_generation_status(generating.id)).state.value == "waiting"
     await service.generate_round(generating.id)
     await service.get_round(generating.id)
 
     assert [name for name, _thread in recording_claims.calls] == [
+        "get",
         "claim",
         "replace_round_and_release",
     ]

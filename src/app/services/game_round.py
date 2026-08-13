@@ -27,6 +27,7 @@ from app.domain.models import (
     ChallengeStatus,
     FailureDetail,
     GameState,
+    GenerationStatusState,
     LeaderboardEntry,
     LevelGroup,
     PipelineResultStatus,
@@ -69,6 +70,13 @@ class LeaderboardProjection:
 
     entries: tuple[LeaderboardEntry, ...]
     current_rank: int
+
+
+@dataclass(frozen=True)
+class GenerationStatus:
+    """Read-only generation state projected from one round and its claim."""
+
+    state: GenerationStatusState
 
 
 class AIPipelineRunner(Protocol):
@@ -345,6 +353,38 @@ class GameRoundService:
         """Return the freshly reconstructed durable record for a round."""
 
         return await self._get_record(round_id)
+
+    async def get_generation_status(self, round_id: str) -> GenerationStatus:
+        """Project a bounded status from the persisted round and active claim."""
+
+        record = await self._get_record(round_id)
+        if record.state is GameState.GENERATED_REVEAL:
+            if (
+                record.generated_artifact is None
+                or record.score is None
+                or record.reveal_deadline is None
+            ):
+                raise GameRoundValidationError("generated round is missing status data")
+            return GenerationStatus(GenerationStatusState.GENERATED)
+        if record.state is not GameState.GENERATING:
+            return GenerationStatus(GenerationStatusState.CONFLICT)
+
+        try:
+            claim = await asyncio.to_thread(self._require_claims().get, round_id)
+        except ValueError as error:
+            raise GameRoundValidationError("stored generation claim is invalid") from error
+        if claim is not None:
+            try:
+                claim_is_active = self._as_datetime(claim.lease_expires_at) > self._as_datetime(
+                    self._timestamp()
+                )
+            except GameRoundValidationError as error:
+                raise GameRoundValidationError("stored generation claim is invalid") from error
+            if claim_is_active:
+                return GenerationStatus(GenerationStatusState.RUNNING)
+        if record.pipeline_failure is not None:
+            return GenerationStatus(GenerationStatusState.FAILURE)
+        return GenerationStatus(GenerationStatusState.WAITING)
 
     async def show_result(self, round_id: str) -> RoundRecord:
         """Authorize the generated reveal timeout and persist the Result scene."""

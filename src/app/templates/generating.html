@@ -3,8 +3,10 @@ endblock %} {% block content %}
 <main
   class="scene generating-scene"
   data-scene="generating"
-  data-generating-state="{% if failure %}failure{% elif generating_state == 'generated_reveal' %}generated{% else %}waiting{% endif %}"
+  data-generating-state="{{ generation_status }}"
   data-round-state="{{ generating_state }}"
+  data-status-url="/rounds/{{ round_id }}/generating/status"
+  data-generating-url="/rounds/{{ round_id }}/generating"
   data-reveal-deadline="{{ reveal_deadline or '' }}"
 >
   <meta name="generation-prompt" value="{{ prompt }}" />
@@ -42,7 +44,11 @@ endblock %} {% block content %}
     </section>
 
     <div class="generating-bottom-action generating-failure-actions">
-      <form action="/rounds/{{ round_id }}/generating/retry" method="post">
+      <form
+        id="generating-retry-form"
+        action="/rounds/{{ round_id }}/generating/retry"
+        method="post"
+      >
         <kiosk-button>
           <button id="retry-generating-button" type="submit">
             ลองอีกครั้ง <span aria-hidden="true">↻</span>

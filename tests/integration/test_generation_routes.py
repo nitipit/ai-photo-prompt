@@ -64,8 +64,10 @@ def test_generation_get_and_run_use_only_persisted_round(runtime_app) -> None:
         )
         assert waiting.status_code == 200
         assert 'data-generating-state="waiting"' in waiting.text
+        assert client.get(f"/rounds/{round_id}/generating/status").json() == {"state": "waiting"}
         assert "attacker" not in waiting.text
         assert f'action="/rounds/{round_id}/generating/run"' in waiting.text
+        assert 'method="post"' in waiting.text
         assert 'name="challenge_id"' not in waiting.text
         assert 'name="prompt"' not in waiting.text
 
@@ -83,6 +85,7 @@ def test_generation_get_and_run_use_only_persisted_round(runtime_app) -> None:
         assert generated.generated_artifact.provider == "fake-ai"
         assert generated.score is not None
         assert generated.reveal_deadline is not None
+        assert client.get(f"/rounds/{round_id}/generating/status").json() == {"state": "generated"}
 
         reveal = client.get(f"/rounds/{round_id}/generating?challenge_id=attacker&prompt=attacker")
         assert reveal.status_code == 200
@@ -104,8 +107,10 @@ def test_generation_failure_has_no_result_and_retry_runs_service_again(runtime_a
         failure = client.get(run.headers["location"])
         assert failure.status_code == 200
         assert 'data-generating-state="failure"' in failure.text
+        assert client.get(f"/rounds/{round_id}/generating/status").json() == {"state": "failure"}
         assert "เกิดข้อผิดพลาดชั่วคราว" in failure.text
         assert 'action="/rounds/' + round_id + '/generating/retry"' in failure.text
+        assert 'method="post"' in failure.text
         assert 'name="challenge_id"' not in failure.text
         assert 'name="prompt"' not in failure.text
 
@@ -170,12 +175,93 @@ def test_generation_run_maps_missing_and_stale_rounds(runtime_app) -> None:
             client.post(f"/rounds/{unknown_id}/generating/run", follow_redirects=False).status_code
             == 404
         )
+        missing_status = client.get(f"/rounds/{unknown_id}/generating/status")
+        assert missing_status.status_code == 404
 
         started = client.post("/rounds", follow_redirects=False)
         round_id = urlsplit(started.headers["location"]).path.split("/")[2]
         stale = client.post(f"/rounds/{round_id}/generating/run", follow_redirects=False)
         assert stale.status_code == 409
+        stale_status = client.get(f"/rounds/{round_id}/generating/status")
+        assert stale_status.status_code == 409
+        assert stale_status.json() == {"state": "conflict"}
         assert client.get(f"/rounds/{round_id}/generating").status_code == 409
+
+
+def test_running_generation_script_guards_native_duplicate_submit() -> None:
+    script = (
+        Path(__file__).resolve().parents[2] / "src" / "app" / "templates" / "generating.ts"
+    ).read_text(encoding="utf-8")
+
+    assert 'state === "running"' in script
+    assert "generationRequestActive = true;" in script
+    assert "interceptGenerationForm(activeForm);" in script
+    assert "setFormBusy(activeForm, true);" in script
+
+
+def test_generation_status_rejects_invalid_persisted_generated_data(runtime_app) -> None:
+    with TestClient(runtime_app) as client:
+        round_id = _start_generating(client)
+        record = _stored_record(runtime_app, round_id)
+        invalid = record.__class__(
+            **{
+                **record.dict(),
+                "state": GameState.GENERATED_REVEAL,
+            }
+        )
+        runtime_app.state.round_repository.replace_unsafe(invalid)
+
+        status = client.get(f"/rounds/{round_id}/generating/status")
+        assert status.status_code == 422
+
+
+@pytest.mark.parametrize("fail", [False, True], ids=["generated", "failure"])
+def test_blocking_generation_keeps_scene_and_status_pollable(
+    runtime_app,
+    fail: bool,
+) -> None:
+    class BlockingPipeline:
+        def __init__(self) -> None:
+            self.started = Event()
+            self.release = Event()
+            self.calls = 0
+
+        async def run(self, challenge, prompt: str, timeout: float):
+            del prompt, timeout
+            self.calls += 1
+            self.started.set()
+            await asyncio.to_thread(self.release.wait)
+            return await FakeAIPipeline(fail=fail).run(challenge, "prompt", 1.0)
+
+    with TestClient(runtime_app) as client:
+        round_id = _start_generating(client)
+        pipeline = BlockingPipeline()
+        runtime_app.state.game_round_service._pipeline = pipeline
+        first_response = []
+
+        def run_first_attempt() -> None:
+            first_response.append(
+                client.post(f"/rounds/{round_id}/generating/run", follow_redirects=False)
+            )
+
+        first = Thread(target=run_first_attempt)
+        first.start()
+        assert pipeline.started.wait(timeout=5)
+
+        in_progress = client.get(f"/rounds/{round_id}/generating")
+        assert in_progress.status_code == 200
+        assert 'data-generating-state="running"' in in_progress.text
+        assert client.get(f"/rounds/{round_id}/generating/status").json() == {"state": "running"}
+
+        pipeline.release.set()
+        first.join(timeout=5)
+        assert not first.is_alive()
+        assert first_response[0].status_code == 303
+        expected_state = "failure" if fail else "generated"
+        assert client.get(f"/rounds/{round_id}/generating/status").json() == {
+            "state": expected_state,
+        }
+        assert pipeline.calls == 1
 
 
 def test_already_running_generation_is_a_stable_conflict(runtime_app) -> None:

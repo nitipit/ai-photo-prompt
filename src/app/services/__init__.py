@@ -6,6 +6,7 @@ from .game_round import (
     GameRoundDeadlineError,
     GameRoundService,
     GameRoundValidationError,
+    GenerationStatus,
     LeaderboardProjection,
 )
 
@@ -15,5 +16,6 @@ __all__ = [
     "GameRoundDeadlineError",
     "GameRoundService",
     "GameRoundValidationError",
+    "GenerationStatus",
     "LeaderboardProjection",
 ]

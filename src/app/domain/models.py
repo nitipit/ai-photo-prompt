@@ -74,6 +74,16 @@ class PipelineResultStatus(StrEnum):
     ERROR = "error"
 
 
+class GenerationStatusState(StrEnum):
+    """Bounded read-only status exposed while a round generates an image."""
+
+    WAITING = "waiting"
+    RUNNING = "running"
+    FAILURE = "failure"
+    GENERATED = "generated"
+    CONFLICT = "conflict"
+
+
 def _to_primitives(value: Any) -> Any:
     """Recursively turn enums and nested containers into MessagePack values."""
 

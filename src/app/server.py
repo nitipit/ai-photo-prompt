@@ -8,14 +8,19 @@ from pathlib import Path
 from uuid import uuid4
 
 from fastapi import FastAPI, Form, HTTPException, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from shelfdb.shelf import DB  # type: ignore[import-untyped]
 
 from .ai import FakeAIPipeline
 from .config import DEFAULT_CATALOG_PATH, DEFAULT_DB_PATH, DIST_DIR
 from .content.repository import ChallengeCatalog
-from .domain.models import ChallengeSpec, GameState, PromptSubmissionReason
+from .domain.models import (
+    ChallengeSpec,
+    GameState,
+    GenerationStatusState,
+    PromptSubmissionReason,
+)
 from .persistence import (
     ChallengeNotFoundError,
     ChallengeRepositoryError,
@@ -30,6 +35,7 @@ from .services import (
     GameRoundDeadlineError,
     GameRoundService,
     GameRoundValidationError,
+    GenerationStatus,
 )
 from .web import (
     render_challenge_reveal,
@@ -243,12 +249,14 @@ async def generating_scene(request: Request, round_id: str):
     record = await _require_round_context(request, round_id)
     if record.state is GameState.GENERATING:
         challenge, prompt = _generation_context(request, record)
+        status = await _get_generation_status(request, round_id)
         return render_generating(
             request,
             round_id,
             challenge,
             prompt,
             state=record.state,
+            generation_status=status.state,
             failure=record.pipeline_failure,
         )
     if record.state is GameState.GENERATED_REVEAL:
@@ -259,12 +267,14 @@ async def generating_scene(request: Request, round_id: str):
             or record.reveal_deadline is None
         ):
             raise HTTPException(status_code=409, detail="Generated round is missing reveal data")
+        status = await _get_generation_status(request, round_id)
         return render_generating(
             request,
             round_id,
             challenge,
             prompt,
             state=record.state,
+            generation_status=status.state,
             generated_artifact=record.generated_artifact,
             score=record.score,
             reveal_deadline=record.reveal_deadline,
@@ -273,6 +283,17 @@ async def generating_scene(request: Request, round_id: str):
         status_code=409,
         detail=f"Round is in {record.state.value}, not a generating state",
     )
+
+
+@app.get("/rounds/{round_id}/generating/status")
+async def generation_status(request: Request, round_id: str):
+    """Return only the bounded persisted status of one generation round."""
+
+    status = await _get_generation_status(request, round_id)
+    content = {"state": status.state.value}
+    if status.state is GenerationStatusState.CONFLICT:
+        return JSONResponse(status_code=409, content=content)
+    return content
 
 
 @app.post("/rounds/{round_id}/generating/run", status_code=303)
@@ -415,6 +436,17 @@ async def _require_round_context(request: Request, round_id: str):
 
     try:
         return await request.app.state.game_round_service.get_round(round_id)
+    except RoundNotFoundError as error:
+        raise HTTPException(status_code=404, detail="Round not found") from error
+    except GameRoundValidationError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+
+
+async def _get_generation_status(request: Request, round_id: str) -> GenerationStatus:
+    """Load a bounded persisted generation status for HTML or JSON callers."""
+
+    try:
+        return await request.app.state.game_round_service.get_generation_status(round_id)
     except RoundNotFoundError as error:
         raise HTTPException(status_code=404, detail="Round not found") from error
     except GameRoundValidationError as error:
