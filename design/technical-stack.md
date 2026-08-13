@@ -29,6 +29,27 @@ enhancement; it does not own game state.
 Pages compose components; a page is not required to become one large custom
 element.
 
+## AI Integration
+
+AI is used as a bounded pipeline, not as an autonomous controller of the game:
+
+- **Image generation** turns the player’s prompt into a generated image.
+- **Prompt evaluation** scores clarity, specificity, relationships, and
+  consistency against the challenge specification.
+- **Image matching** scores the generated image against the target’s core
+  concept, supporting details, and scene coherence.
+- **Feedback composition** turns validated scoring evidence into concise,
+  child-friendly feedback.
+
+A server-side game service owns the sequence, state, timeout, retry, and failure
+handling. Each AI capability is exposed behind an explicit provider interface
+and returns a structured, validated result. AI does not own session state, page
+navigation, or leaderboard persistence.
+
+The challenge importer materializes Markdown briefs and target references into a
+structured `ChallengeSpec` before runtime. AI services receive that structured
+record and do not parse Markdown during a round.
+
 ## Data and Object Boundaries
 
 - **ShelfDB** is the persistence layer. It provides a simple Python-friendly
@@ -65,5 +86,6 @@ The following remain intentionally open until implementation planning:
 - Dictify model definitions
 - Scoring and feedback calculation
 - Image-generation provider and failure handling
+- Exact AI provider interfaces, model selection, and evaluation prompt design
 - Component catalog and page module boundaries
 - Exact timer durations and transition animation choices

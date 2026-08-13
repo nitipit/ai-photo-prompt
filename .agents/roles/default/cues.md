@@ -60,3 +60,9 @@ discoveries, patterns, problems, and next-step context.
 | `content>m1-m3-five-targets-approved-modular` | 2026-08-09T13:19:11+07:00 |
 | `content>m4-m6-five-targets-approved-modular` | 2026-08-09T14:44:29+07:00 |
 | `metadata>challenge-frontmatter-id-title-level-status-target` | 2026-08-09T15:25:53+07:00 |
+| `ai>bounded-pipeline-game-service-orchestrates` | 2026-08-13T16:24:25+07:00 |
+| `team>manager-current-four-workers-isolated-integration` | 2026-08-13T16:40:46+07:00 |
+| `roles>plan-implement-debug-review-verify repo-local` | 2026-08-13T16:49:39+07:00 |
+| `default>orchestrate direct-one-turn-or-one-minute` | 2026-08-13T16:52:36+07:00 |
+| `models>implement-openai-codex-luna-xhigh` | 2026-08-13T16:56:56+07:00 |
+| `tmux>owned-aipp-fs-namespace-never-touch-other-teams` | 2026-08-13T17:00:03+07:00 |
