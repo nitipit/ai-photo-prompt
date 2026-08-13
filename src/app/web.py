@@ -27,3 +27,13 @@ def render_level_selection(request: Request, round_id: str):
         name="level.html",
         context={"round_id": round_id},
     )
+
+
+def render_challenge_reveal(request: Request, round_id: str, challenge):
+    """Render the selected challenge image without exposing its design brief."""
+
+    return templates.TemplateResponse(
+        request=request,
+        name="challenge.html",
+        context={"round_id": round_id, "challenge": challenge},
+    )

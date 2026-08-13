@@ -33,13 +33,13 @@
       id="level-form"
       class="level-panel"
       action="/rounds/{{ round_id }}/level"
-      method="get"
+      method="post"
     >
       <fieldset>
         <legend>คุณอยู่ช่วงชั้นไหน?</legend>
         <div class="level-grid">
           <label class="level-choice" data-level-card data-level="p1-p3">
-            <input type="radio" name="level" value="p1-p3" />
+            <input type="radio" name="level" value="p1-p3" required />
             <span class="level-choice-surface">
               <span class="choice-symbol" aria-hidden="true">✦</span>
               <span class="choice-copy"><strong>ป.1 – ป.3</strong><small
@@ -79,6 +79,13 @@
       <p class="selection-note">
         <span aria-hidden="true">✦</span> เลือกช่วงชั้นเพื่อเตรียมโจทย์ให้คุณ
       </p>
+      <div class="level-submit">
+        <kiosk-button>
+          <button type="submit">
+            ดูภาพโจทย์ <span aria-hidden="true">→</span>
+          </button>
+        </kiosk-button>
+      </div>
     </form>
   </div>
 </main>

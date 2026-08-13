@@ -1,0 +1,44 @@
+{% extends "_base.html" %} {% block title %}ภาพโจทย์ | Photo Prompt{% endblock %}
+{% block content %}
+<main class="scene challenge-scene" data-scene="challenge-reveal">
+  <header class="scene-topbar">
+    <a class="brand" href="/" aria-label="กลับหน้าพร้อมเล่น">
+      <span class="brand-mark" aria-hidden="true">✦</span>
+      <span class="brand-name">PHOTO <strong>PROMPT</strong></span>
+    </a>
+    <p class="scene-tag">ภาพโจทย์</p>
+  </header>
+
+  <div class="challenge-layout">
+    <section class="challenge-heading" aria-labelledby="challenge-title">
+      <p class="eyebrow">โจทย์ของคุณ</p>
+      <h1 id="challenge-title">
+        มองภาพนี้ให้ดี<br /><span>แล้วเตรียมไอเดียของคุณ</span>
+      </h1>
+    </section>
+
+    <figure class="challenge-hero">
+      <div class="challenge-frame">
+        <img
+          class="challenge-image"
+          src="{{ challenge.target_asset_url }}"
+          alt="ภาพโจทย์สำหรับรอบนี้"
+        />
+      </div>
+    </figure>
+
+    <div class="challenge-action">
+      <form action="/rounds/{{ round_id }}/challenge/continue" method="post">
+        <kiosk-button>
+          <button id="continue-challenge-button" type="submit">
+            พร้อมแล้ว <span aria-hidden="true">→</span>
+          </button>
+        </kiosk-button>
+      </form>
+      <p>กดเมื่อพร้อมเปลี่ยนภาพนี้ให้เป็นคำสั่ง</p>
+    </div>
+  </div>
+</main>
+{% endblock %} {% block page_script %}
+<script type="module" src="/templates/challenge.js"></script>
+{% endblock %}
