@@ -26,7 +26,7 @@ class FakeImageGenerator:
     ) -> ProviderSuccess:
         del prompt, timeout
         artifact = ImageArtifact(
-            url=f"/generated/fake-ai/{challenge.id}.webp",
+            url=challenge.target_asset_url,
             provider="fake-ai",
             width=1024,
             height=1024,

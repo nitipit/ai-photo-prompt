@@ -28,7 +28,7 @@ async def test_fake_pipeline_is_deterministic_and_returns_three_thai_lines() -> 
 
     assert first.status is PipelineResultStatus.SUCCESS
     assert first.dict() == second.dict()
-    assert first.artifact.url == "/generated/fake-ai/p1-p3-01.webp"
+    assert first.artifact.url == "/assets/challenges/p1-p3-01.webp"
     assert first.artifact.provider == "fake-ai"
     assert first.prompt_evaluation.dict() == {
         "clarity": 80,
