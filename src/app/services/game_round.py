@@ -93,6 +93,7 @@ class AIPipelineRunner(Protocol):
 _PROMPT_DEADLINE = timedelta(seconds=90)
 _REVEAL_DURATION = timedelta(seconds=5)
 _LEADERBOARD_DURATION = timedelta(seconds=15)
+_MAX_LEADERBOARD_ROWS = 4
 _DEFAULT_CLAIM_LEASE = timedelta(seconds=30)
 _DEFAULT_PROVIDER_TIMEOUT = 10.0
 _PROVIDER_TIMEOUT_CODE = "provider_timeout"
@@ -442,6 +443,19 @@ class GameRoundService:
         await self._replace_current(record, replacement, "complete round")
         return replacement
 
+    def leaderboard_deadline_elapsed(self, record: RoundRecord) -> bool:
+        """Compare the persisted leaderboard deadline with the authoritative clock."""
+
+        if record.leaderboard_deadline is None:
+            raise GameRoundValidationError("Leaderboard data is incomplete")
+        try:
+            deadline = self._as_datetime(record.leaderboard_deadline)
+        except GameRoundValidationError as error:
+            raise GameRoundValidationError(
+                "round contains a malformed leaderboard deadline"
+            ) from error
+        return self._as_datetime(self._timestamp()) >= deadline
+
     async def get_leaderboard(self, round_id: str) -> LeaderboardProjection:
         """Project the current completed round into its level's ranked history."""
 
@@ -477,6 +491,7 @@ class GameRoundService:
         )
         entries: list[LeaderboardEntry] = []
         current_rank: int | None = None
+        current_index: int | None = None
         previous_rank = 0
         previous_score: int | float | None = None
         for index, row in enumerate(ordered):
@@ -496,14 +511,16 @@ class GameRoundService:
             entries.append(entry)
             if row.id == current.id:
                 current_rank = rank
+                current_index = index
             previous_rank = rank
             previous_score = score
 
-        if current_rank is None:
+        if current_rank is None or current_index is None:
             raise GameRoundValidationError(
                 "current completed round must appear exactly once in leaderboard"
             )
-        return LeaderboardProjection(tuple(entries), current_rank)
+        visible_entries = self._leaderboard_window(entries, current_index)
+        return LeaderboardProjection(visible_entries, current_rank)
 
     async def _persist_generation_success(
         self,
@@ -745,6 +762,21 @@ class GameRoundService:
         cls._as_datetime(record.leaderboard_deadline)
         cls._require_result_context(record)
         return record
+
+    @staticmethod
+    def _leaderboard_window(
+        entries: list[LeaderboardEntry], current_index: int
+    ) -> tuple[LeaderboardEntry, ...]:
+        """Keep four contiguous rows while retaining global rank context."""
+
+        if len(entries) <= _MAX_LEADERBOARD_ROWS:
+            return tuple(entries)
+        if current_index < _MAX_LEADERBOARD_ROWS:
+            start = 0
+        else:
+            start = current_index - 2
+        start = min(start, len(entries) - _MAX_LEADERBOARD_ROWS)
+        return tuple(entries[start : start + _MAX_LEADERBOARD_ROWS])
 
     @staticmethod
     def _visible_score(record: RoundRecord) -> int | float:

@@ -193,6 +193,86 @@ def test_result_flow_uses_persisted_lifecycle_and_ignores_tampering(runtime_app)
         assert completed.feedback == result_record.feedback
 
 
+@pytest.mark.parametrize(
+    ("offset_seconds", "expected_status"),
+    ((-1, 200), (0, 303), (1, 303)),
+)
+def test_leaderboard_get_enforces_persisted_deadline_without_mutation(
+    runtime_app, offset_seconds: int, expected_status: int
+) -> None:
+    with TestClient(runtime_app) as client:
+        round_id = _start_generated(client, display_name="Current")
+        generated = _stored_record(runtime_app, round_id)
+        assert generated.reveal_deadline is not None
+        _set_clock_at(runtime_app, generated.reveal_deadline)
+        assert (
+            client.post(
+                f"/rounds/{round_id}/generating/continue",
+                follow_redirects=False,
+            ).status_code
+            == 303
+        )
+        assert (
+            client.post(
+                f"/rounds/{round_id}/result/leaderboard",
+                follow_redirects=False,
+            ).status_code
+            == 303
+        )
+        completed = _stored_record(runtime_app, round_id)
+        assert completed.leaderboard_deadline is not None
+        before = completed.dict()
+        deadline = datetime.fromisoformat(completed.leaderboard_deadline)
+        _set_clock_at(runtime_app, (deadline + timedelta(seconds=offset_seconds)).isoformat())
+
+        response = client.get(
+            f"/rounds/{round_id}/leaderboard?score=999&prompt=client-fact",
+            follow_redirects=False,
+        )
+
+        assert response.status_code == expected_status
+        if expected_status == 200:
+            assert "client-fact" not in response.text
+            assert completed.leaderboard_deadline in response.text
+        else:
+            assert response.headers["location"] == "/"
+            reloaded = client.get(
+                f"/rounds/{round_id}/leaderboard",
+                follow_redirects=False,
+            )
+            assert reloaded.status_code == 303
+            assert reloaded.headers["location"] == "/"
+        assert _stored_record(runtime_app, round_id).dict() == before
+
+
+def test_leaderboard_missing_deadline_remains_validation_error(runtime_app) -> None:
+    with TestClient(runtime_app) as client:
+        round_id = _start_generated(client, display_name="Current")
+        generated = _stored_record(runtime_app, round_id)
+        assert generated.reveal_deadline is not None
+        _set_clock_at(runtime_app, generated.reveal_deadline)
+        assert (
+            client.post(
+                f"/rounds/{round_id}/generating/continue", follow_redirects=False
+            ).status_code
+            == 303
+        )
+        assert (
+            client.post(
+                f"/rounds/{round_id}/result/leaderboard", follow_redirects=False
+            ).status_code
+            == 303
+        )
+        completed = _stored_record(runtime_app, round_id)
+        invalid = RoundRecord({**completed.dict(), "leaderboard_deadline": None})
+        runtime_app.state.round_repository.replace(invalid)
+
+        response = client.get(f"/rounds/{round_id}/leaderboard", follow_redirects=False)
+
+        assert response.status_code == 422
+        assert _stored_record(runtime_app, round_id).dict() == invalid.dict()
+
+
 def test_leaderboard_route_renders_only_completed_current_level_projection(runtime_app) -> None:
     with TestClient(runtime_app) as client:
         round_id = _start_generated(client, display_name="Current")
@@ -273,6 +353,7 @@ def test_leaderboard_route_renders_only_completed_current_level_projection(runti
         assert 'data-leaderboard-deadline="' in leaderboard.text
         assert 'data-current-rank="2"' in leaderboard.text
         assert 'data-entry-rank="1"' in leaderboard.text
+        assert leaderboard.text.count('data-leaderboard-entry="completed-round-projection"') <= 4
         assert leaderboard.text.count('data-current-entry="true"') == 2
         assert 'data-current-entry="true"' in leaderboard.text
         assert "tie persisted prompt with every detail" in leaderboard.text
@@ -283,6 +364,30 @@ def test_leaderboard_route_renders_only_completed_current_level_projection(runti
         assert "deterministic-demo" not in leaderboard.text
         assert 'data-image-source="persisted-generated-artifact"' in leaderboard.text
         assert 'data-ranking="competition-rank"' in leaderboard.text
+
+
+def test_leaderboard_frontend_contract_is_single_screen_without_list_clipping() -> None:
+    base_template = Path(__file__).parents[2] / "src/app/templates/_base.html"
+    leaderboard_template = Path(__file__).parents[2] / "src/app/templates/leaderboard.html"
+    base_source = base_template.read_text(encoding="utf-8")
+    leaderboard_source = leaderboard_template.read_text(encoding="utf-8")
+    scene_rule = base_source[
+        base_source.index("        .scene {") : base_source.index(
+            "        .scene::before", base_source.index("        .scene {")
+        )
+    ]
+    list_rule = base_source[
+        base_source.index("        .leaderboard-list {") : base_source.index(
+            "        .leaderboard-row {", base_source.index("        .leaderboard-list {")
+        )
+    ]
+
+    assert "width: min(100vw, calc(100vh * 16 / 9));" in scene_rule
+    assert "height: min(100vh, calc(100vw * 9 / 16));" in scene_rule
+    assert "grid-template-rows: repeat(4" in list_rule
+    assert "overflow" not in list_rule
+    assert 'data-leaderboard-deadline="{{ leaderboard_deadline }}"' in leaderboard_source
+    assert 'data-leaderboard-list="completed-round-projection"' in leaderboard_source
 
 
 def test_result_and_leaderboard_routes_map_missing_and_stale_rounds(runtime_app) -> None:

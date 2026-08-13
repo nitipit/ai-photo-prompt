@@ -260,6 +260,64 @@ async def test_leaderboard_projects_current_level_competition_rank_and_full_fiel
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("current_index", "expected_indexes"),
+    (
+        (0, (0, 1, 2, 3)),
+        (3, (0, 1, 2, 3)),
+        (4, (2, 3, 4, 5)),
+        (7, (4, 5, 6, 7)),
+    ),
+)
+async def test_leaderboard_window_is_bounded_and_contains_current_entry(
+    setup, current_index: int, expected_indexes: tuple[int, ...]
+) -> None:
+    repository, claims, clock = setup
+    service = service_for(repository, claims, clock)
+    ids = [f"00000000-0000-0000-0000-{index:012d}" for index in range(1, 9)]
+    rows = [
+        make_completed(
+            round_id=round_id,
+            score=100 - index,
+            name=f"Player {index}",
+        )
+        for index, round_id in enumerate(ids)
+    ]
+    current = rows[current_index]
+    for row in rows:
+        repository.create(row)
+
+    projection = await service.get_leaderboard(current.id)
+
+    assert len(projection.entries) == 4
+    assert [entry.round_id for entry in projection.entries] == [ids[i] for i in expected_indexes]
+    assert sum(entry.is_current for entry in projection.entries) == 1
+    assert projection.current_rank == current_index + 1
+
+
+@pytest.mark.asyncio
+async def test_leaderboard_window_preserves_competition_ranks_across_ties(setup) -> None:
+    repository, claims, clock = setup
+    service = service_for(repository, claims, clock)
+    ids = [f"00000000-0000-0000-0000-{index:012d}" for index in range(1, 7)]
+    scores = (100, 90, 90, 80, 80, 70)
+    rows = [
+        make_completed(round_id=round_id, score=score, name=f"Player {index}")
+        for index, (round_id, score) in enumerate(zip(ids, scores, strict=True))
+    ]
+    current = rows[4]
+    for row in rows:
+        repository.create(row)
+
+    projection = await service.get_leaderboard(current.id)
+
+    assert [entry.round_id for entry in projection.entries] == ids[2:]
+    assert [entry.rank for entry in projection.entries] == [2, 4, 4, 6]
+    assert projection.current_rank == 4
+    assert projection.entries[2].is_current is True
+
+
+@pytest.mark.asyncio
 async def test_malformed_completed_row_rejects_projection_instead_of_partial_data(
     setup,
 ) -> None:

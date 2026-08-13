@@ -394,6 +394,12 @@ async def leaderboard_scene(request: Request, round_id: str):
 
     record = await _get_scene_round(request, round_id, GameState.LEADERBOARD)
     try:
+        if request.app.state.game_round_service.leaderboard_deadline_elapsed(record):
+            return RedirectResponse(url="/", status_code=303)
+    except GameRoundValidationError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+
+    try:
         projection = await request.app.state.game_round_service.get_leaderboard(round_id)
     except RoundNotFoundError as error:
         raise HTTPException(status_code=404, detail="Round not found") from error
