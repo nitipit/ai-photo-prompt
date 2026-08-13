@@ -22,7 +22,7 @@ from app.persistence import (
 NOW = datetime(2026, 1, 1, 0, 0, 10, tzinfo=UTC).isoformat()
 CLAIMED_AT = datetime(2026, 1, 1, tzinfo=UTC).isoformat()
 LIVE_EXPIRY = datetime(2026, 1, 1, 0, 1, tzinfo=UTC).isoformat()
-EXPIRED_EXPIRY = datetime(2025, 12, 31, 23, 59, tzinfo=UTC).isoformat()
+EXPIRED_EXPIRY = datetime(2026, 1, 1, 0, 0, 5, tzinfo=UTC).isoformat()
 
 
 def make_round(
@@ -81,12 +81,34 @@ def test_expired_claim_is_replaced_atomically(persistence) -> None:
     record = make_round()
     replacement = make_claim("attempt-2")
     rounds.create(record)
-    claims.claim(record.id, make_claim(lease_expires_at=EXPIRED_EXPIRY), NOW)
+    claims.claim(record.id, make_claim(lease_expires_at=EXPIRED_EXPIRY), CLAIMED_AT)
 
     returned = claims.claim(record.id, replacement, NOW)
 
     assert returned.dict() == replacement.dict()
     assert claims.get(record.id).dict() == replacement.dict()
+
+
+@pytest.mark.parametrize(
+    ("lease_expires_at", "message"),
+    [
+        (CLAIMED_AT, "after claimed_at"),
+        (NOW, "after now"),
+    ],
+)
+def test_invalid_new_claim_chronology_rolls_back_without_storage(
+    persistence,
+    lease_expires_at: str,
+    message: str,
+) -> None:
+    claims, rounds = persistence
+    record = make_round()
+    rounds.create(record)
+
+    with pytest.raises(ValueError, match=message):
+        claims.claim(record.id, make_claim(lease_expires_at=lease_expires_at), NOW)
+
+    assert claims.get(record.id) is None
 
 
 @pytest.mark.parametrize(
@@ -185,7 +207,7 @@ def test_stale_token_cannot_commit_after_claim_replacement(persistence) -> None:
     old_claim = make_claim("old-token", lease_expires_at=EXPIRED_EXPIRY)
     new_claim = make_claim("new-token")
     rounds.create(record)
-    claims.claim(record.id, old_claim, NOW)
+    claims.claim(record.id, old_claim, CLAIMED_AT)
     claims.claim(record.id, new_claim, NOW)
 
     replacement = RoundRecord(**{**record.dict(), "state": GameState.GENERATED_REVEAL})

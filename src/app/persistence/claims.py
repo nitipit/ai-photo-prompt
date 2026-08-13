@@ -44,6 +44,16 @@ class ShelfDbGenerationClaims:
 
         validated_claim = _validate_claim(claim)
         now_value = _parse_utc_timestamp(now, "now")
+        claimed_at = _parse_utc_timestamp(validated_claim.claimed_at, "claimed_at")
+        lease_expires_at = _parse_utc_timestamp(
+            validated_claim.lease_expires_at,
+            "lease_expires_at",
+        )
+        if lease_expires_at <= claimed_at:
+            raise ValueError("lease_expires_at must be after claimed_at")
+        if lease_expires_at <= now_value:
+            raise ValueError("lease_expires_at must be after now")
+
         with self._write_lock, self._db.transaction(write=True) as transaction:
             round_shelf = transaction.shelf(_ROUNDS_SHELF)
             round_record = _read_round(round_shelf, round_id)
