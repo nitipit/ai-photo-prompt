@@ -1,0 +1,56 @@
+{% extends "_base.html" %} {% block title %}พร้อมเล่น | Photo Prompt{% endblock %}
+{% block content %}
+<main class="scene ready-scene" data-scene="ready">
+  <header class="scene-topbar">
+    <a class="brand" href="/" aria-label="Photo Prompt หน้าพร้อมเล่น">
+      <span class="brand-mark" aria-hidden="true">✦</span>
+      <span class="brand-name">PHOTO <strong>PROMPT</strong></span>
+    </a>
+    <p class="scene-tag">SCIENCE WEEK · 2026</p>
+  </header>
+
+  <div class="ready-layout">
+    <section class="ready-copy" aria-labelledby="ready-title">
+      <p class="eyebrow">เกมบูธสัปดาห์วิทยาศาสตร์</p>
+      <h1 id="ready-title">
+        เปลี่ยนภาพที่เห็น<br />
+        <span>ให้เป็นคำสั่งของคุณ</span>
+      </h1>
+      <p class="ready-lede">
+        สังเกตให้ดี คิดให้ชัด แล้วชวน AI สร้างภาพในแบบของคุณ
+      </p>
+      <form action="/rounds" method="post">
+        <kiosk-button>
+          <button id="start-button" type="submit">
+            เริ่มเล่น <span aria-hidden="true">→</span>
+          </button>
+        </kiosk-button>
+      </form>
+      <p class="ready-hint">
+        <span aria-hidden="true">●</span> เล่นทีละ 1 คน · ใช้เวลาประมาณ 3 นาที
+      </p>
+    </section>
+
+    <aside class="ready-art" aria-label="ภาพประกอบกล้องและประกายไอเดีย">
+      <div class="art-glow" aria-hidden="true"></div>
+      <div class="art-frame">
+        <div class="art-sun" aria-hidden="true"></div>
+        <div class="art-spark spark-one" aria-hidden="true">✦</div>
+        <div class="art-spark spark-two" aria-hidden="true">✧</div>
+        <div class="art-camera" aria-hidden="true">
+          <div class="camera-lens"></div>
+          <div class="camera-flash"></div>
+        </div>
+        <div class="art-note" aria-hidden="true">
+          <span>idea</span>
+          <strong>+</strong>
+          <span>AI</span>
+        </div>
+      </div>
+      <p class="art-caption">เห็น · คิด · สั่ง · สร้าง</p>
+    </aside>
+  </div>
+</main>
+{% endblock %} {% block page_script %}
+<script type="module" src="/templates/ready.js"></script>
+{% endblock %}

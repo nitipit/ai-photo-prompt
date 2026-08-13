@@ -1,0 +1,20 @@
+{
+  "nodeModulesDir": "auto",
+  "unstable": ["sloppy-imports"],
+  "lint": {
+    "rules": {
+      "exclude": ["no-sloppy-imports"]
+    }
+  },
+  "compilerOptions": {
+    "lib": ["deno.ns", "dom", "dom.iterable", "esnext"]
+  },
+  "tasks": {
+    "app:build": "deno run -A src/build/app.ts",
+    "app:serve": "uv run uvicorn app.server:app --app-dir src --reload",
+    "dev": "deno task app:build && deno task app:serve",
+    "check": "deno check src/build/app.ts src/app/templates/**/*.ts",
+    "fmt": "deno fmt src/build src/app/templates",
+    "lint": "deno lint src/build src/app/templates"
+  }
+}

@@ -1,0 +1,87 @@
+{% extends "_base.html" %} {% block title %}เลือกช่วงชั้น | Photo Prompt{% endblock
+%} {% block content %}
+<main class="scene level-scene" data-scene="level-selection">
+  <header class="scene-topbar">
+    <a class="brand" href="/" aria-label="กลับหน้าพร้อมเล่น">
+      <span class="brand-mark" aria-hidden="true">✦</span>
+      <span class="brand-name">PHOTO <strong>PROMPT</strong></span>
+    </a>
+    <p class="scene-tag">ตั้งค่ารอบเล่น</p>
+  </header>
+
+  <div class="level-layout">
+    <section class="level-intro" aria-labelledby="level-title">
+      <p class="eyebrow">เริ่มภารกิจ</p>
+      <h1 id="level-title">เลือกช่วงชั้น<br /><span>ให้เหมาะกับคุณ</span></h1>
+      <p class="level-lede">
+        ใส่ชื่อเล่นได้ ถ้าอยากให้ชื่อของคุณปรากฏบน leaderboard
+      </p>
+      <label class="name-field">
+        <span>ชื่อเล่น <small>ไม่บังคับ</small></span>
+        <input
+          type="text"
+          name="display_name"
+          maxlength="30"
+          placeholder="เช่น น้องฟ้า"
+          autocomplete="nickname"
+          form="level-form"
+        />
+      </label>
+    </section>
+
+    <form
+      id="level-form"
+      class="level-panel"
+      action="/rounds/{{ round_id }}/level"
+      method="get"
+    >
+      <fieldset>
+        <legend>คุณอยู่ช่วงชั้นไหน?</legend>
+        <div class="level-grid">
+          <label class="level-choice" data-level-card data-level="p1-p3">
+            <input type="radio" name="level" value="p1-p3" />
+            <span class="level-choice-surface">
+              <span class="choice-symbol" aria-hidden="true">✦</span>
+              <span class="choice-copy"><strong>ป.1 – ป.3</strong><small
+                >นักสำรวจตัวจิ๋ว</small></span>
+              <span class="choice-arrow" aria-hidden="true">↗</span>
+            </span>
+          </label>
+          <label class="level-choice" data-level-card data-level="p4-p6">
+            <input type="radio" name="level" value="p4-p6" />
+            <span class="level-choice-surface">
+              <span class="choice-symbol" aria-hidden="true">✹</span>
+              <span class="choice-copy"><strong>ป.4 – ป.6</strong><small
+                >นักประดิษฐ์</small></span>
+              <span class="choice-arrow" aria-hidden="true">↗</span>
+            </span>
+          </label>
+          <label class="level-choice" data-level-card data-level="m1-m3">
+            <input type="radio" name="level" value="m1-m3" />
+            <span class="level-choice-surface">
+              <span class="choice-symbol" aria-hidden="true">◎</span>
+              <span class="choice-copy"><strong>ม.1 – ม.3</strong><small
+                >นักทดลอง</small></span>
+              <span class="choice-arrow" aria-hidden="true">↗</span>
+            </span>
+          </label>
+          <label class="level-choice" data-level-card data-level="m4-m6">
+            <input type="radio" name="level" value="m4-m6" />
+            <span class="level-choice-surface">
+              <span class="choice-symbol" aria-hidden="true">⌁</span>
+              <span class="choice-copy"><strong>ม.4 – ม.6</strong><small
+                >นักสร้างสรรค์</small></span>
+              <span class="choice-arrow" aria-hidden="true">↗</span>
+            </span>
+          </label>
+        </div>
+      </fieldset>
+      <p class="selection-note">
+        <span aria-hidden="true">✦</span> เลือกช่วงชั้นเพื่อเตรียมโจทย์ให้คุณ
+      </p>
+    </form>
+  </div>
+</main>
+{% endblock %} {% block page_script %}
+<script type="module" src="/templates/level.js"></script>
+{% endblock %}

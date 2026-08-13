@@ -1,0 +1,11 @@
+{
+  "name": "photo-prompt",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@devcapsule/adapter": "npm:@jsr/devcapsule__adapter@3.3.2"
+  },
+  "devDependencies": {
+    "esbuild": "0.25.11"
+  }
+}
