@@ -66,3 +66,5 @@ discoveries, patterns, problems, and next-step context.
 | `default>orchestrate direct-one-turn-or-one-minute` | 2026-08-13T16:52:36+07:00 |
 | `models>implement-openai-codex-luna-xhigh` | 2026-08-13T16:56:56+07:00 |
 | `tmux>owned-aipp-fs-namespace-never-touch-other-teams` | 2026-08-13T17:00:03+07:00 |
+| `default>available-adaptive-watchdogs-management-context-only` | 2026-08-13T17:11:57+07:00 |
+| `architecture>functional-skeleton-contract-locked` | 2026-08-13T17:39:02+07:00 |
