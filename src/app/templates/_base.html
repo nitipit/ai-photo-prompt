@@ -560,6 +560,7 @@
         }
 
         .challenge-heading {
+          padding-bottom: 0.75rem;
           text-align: center;
         }
 
@@ -578,12 +579,13 @@
         .challenge-hero {
           display: grid;
           min-height: 0;
+          overflow: hidden;
           place-items: center;
         }
 
         .challenge-frame {
           position: relative;
-          width: min(76%, 62rem);
+          width: min(76%, 62rem, 80vh);
           aspect-ratio: 16 / 9;
           overflow: hidden;
           border: 0.35rem solid rgba(245, 247, 239, 0.88);
@@ -612,8 +614,15 @@
 
         .challenge-action {
           display: grid;
+          width: min(100%, 50rem);
+          min-height: 5.75rem;
+          justify-self: center;
           justify-items: center;
           gap: 0.55rem;
+          border-top: 1px solid rgba(157, 181, 189, 0.28);
+          border-radius: 1.25rem 1.25rem 0 0;
+          padding: 0.85rem 1rem 0;
+          background: rgba(7, 26, 45, 0.36);
         }
 
         .challenge-action p {
