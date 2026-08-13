@@ -69,9 +69,9 @@ class RecordingClaims:
         self.calls.append(("claim", get_ident()))
         return self.claims.claim(round_id, claim, now)
 
-    def replace_round_and_release(self, record, attempt_token):
+    def replace_round_and_release(self, record, attempt_token, now):
         self.calls.append(("replace_round_and_release", get_ident()))
-        return self.claims.replace_round_and_release(record, attempt_token)
+        return self.claims.replace_round_and_release(record, attempt_token, now)
 
     def replace_round_and_clear_claim(self, record):
         self.calls.append(("replace_round_and_clear_claim", get_ident()))
@@ -92,9 +92,14 @@ class RetryPipeline:
 
 
 class BlockingPipeline:
-    def __init__(self, expected_timeout: float = 10.0) -> None:
+    def __init__(
+        self,
+        expected_timeout: float = 10.0,
+        result: AIPipelineResult | None = None,
+    ) -> None:
         self.calls = 0
         self.expected_timeout = expected_timeout
+        self.result = result
         self.started = asyncio.Event()
         self.release = asyncio.Event()
 
@@ -104,7 +109,7 @@ class BlockingPipeline:
         assert timeout == self.expected_timeout
         self.started.set()
         await self.release.wait()
-        return success_result(challenge)
+        return self.result if self.result is not None else success_result(challenge)
 
 
 def make_catalog() -> ChallengeCatalog:
@@ -174,7 +179,12 @@ def setup(tmp_path: Path):
 
 
 def service_for(
-    repository, claims, clock, pipeline=None, provider_timeout=10.0
+    repository,
+    claims,
+    clock,
+    pipeline=None,
+    provider_timeout=10.0,
+    claim_lease_duration=timedelta(seconds=30),
 ) -> GameRoundService:
     return GameRoundService(
         repository,
@@ -184,6 +194,7 @@ def service_for(
         generation_claims=claims,
         pipeline=pipeline if pipeline is not None else FakeAIPipeline(),
         owner_instance="test-worker",
+        claim_lease_duration=claim_lease_duration,
         provider_timeout=provider_timeout,
     )
 
@@ -290,6 +301,37 @@ async def test_concurrent_generation_claims_run_blocking_pipeline_once(setup) ->
 
     assert generated.state is GameState.GENERATED_REVEAL
     assert pipeline.calls == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "result",
+    [None, failure_result()],
+    ids=["success", "failure"],
+)
+async def test_expired_attempt_cannot_commit_success_or_failure(
+    setup,
+    result: AIPipelineResult | None,
+) -> None:
+    repository, claims, clock = setup
+    pipeline = BlockingPipeline(result=result)
+    service = service_for(repository, claims, clock, pipeline)
+    generating = await prepare_generating(service)
+    attempt = asyncio.create_task(service.generate_round(generating.id))
+    await pipeline.started.wait()
+
+    before = await service.get_round(generating.id)
+    clock.current += timedelta(seconds=30)
+    pipeline.release.set()
+
+    with pytest.raises(GameRoundConflictError):
+        await attempt
+
+    stored = await service.get_round(generating.id)
+    assert stored.dict() == before.dict()
+    stored_claim = claims.get(generating.id)
+    assert stored_claim is not None
+    assert stored_claim.lease_expires_at == clock.current.isoformat()
 
 
 @pytest.mark.asyncio

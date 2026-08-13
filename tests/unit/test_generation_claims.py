@@ -9,7 +9,13 @@ from uuid import uuid4
 import pytest
 from shelfdb.shelf import DB  # type: ignore[import-untyped]
 
-from app.domain.models import AttemptClaim, GameState, RoundRecord, TerminalDisposition
+from app.domain.models import (
+    AttemptClaim,
+    FailureDetail,
+    GameState,
+    RoundRecord,
+    TerminalDisposition,
+)
 from app.persistence import (
     GenerationAlreadyRunningError,
     RoundNotClaimableError,
@@ -148,10 +154,15 @@ def test_renew_requires_token_and_preserves_claim_fields(persistence) -> None:
     claims.claim(record.id, existing, NOW)
 
     with pytest.raises(StaleAttemptTokenError):
-        claims.renew(record.id, "wrong-token", LIVE_EXPIRY)
+        claims.renew(record.id, "wrong-token", LIVE_EXPIRY, NOW)
     assert claims.get(record.id).dict() == existing.dict()
 
-    renewed = claims.renew(record.id, existing.attempt_token, "2026-01-01T00:02:00Z")
+    renewed = claims.renew(
+        record.id,
+        existing.attempt_token,
+        "2026-01-01T00:02:00Z",
+        NOW,
+    )
 
     assert renewed.owner_instance == existing.owner_instance
     assert renewed.claimed_at == existing.claimed_at
@@ -166,7 +177,34 @@ def test_renew_rejects_expiry_at_or_before_claimed_time(persistence) -> None:
     claims.claim(record.id, existing, NOW)
 
     with pytest.raises(ValueError, match="after claimed_at"):
-        claims.renew(record.id, existing.attempt_token, CLAIMED_AT)
+        claims.renew(record.id, existing.attempt_token, CLAIMED_AT, NOW)
+
+    assert claims.get(record.id).dict() == existing.dict()
+
+
+@pytest.mark.parametrize("now", [EXPIRED_EXPIRY, NOW])
+def test_renew_rejects_expired_claim_at_and_after_expiry(persistence, now: str) -> None:
+    claims, rounds = persistence
+    record = make_round()
+    existing = make_claim(lease_expires_at=EXPIRED_EXPIRY)
+    rounds.create(record)
+    claims.claim(record.id, existing, CLAIMED_AT)
+
+    with pytest.raises(StaleAttemptTokenError):
+        claims.renew(record.id, existing.attempt_token, LIVE_EXPIRY, now)
+
+    assert claims.get(record.id).dict() == existing.dict()
+
+
+def test_renew_requires_new_expiry_after_now(persistence) -> None:
+    claims, rounds = persistence
+    record = make_round()
+    existing = make_claim()
+    rounds.create(record)
+    claims.claim(record.id, existing, NOW)
+
+    with pytest.raises(ValueError, match="after now"):
+        claims.renew(record.id, existing.attempt_token, NOW, NOW)
 
     assert claims.get(record.id).dict() == existing.dict()
 
@@ -179,12 +217,26 @@ def test_release_requires_token_and_deletes_matching_claim(persistence) -> None:
     claims.claim(record.id, existing, NOW)
 
     with pytest.raises(StaleAttemptTokenError):
-        claims.release(record.id, "wrong-token")
+        claims.release(record.id, "wrong-token", NOW)
     assert claims.get(record.id).dict() == existing.dict()
 
-    claims.release(record.id, existing.attempt_token)
+    claims.release(record.id, existing.attempt_token, NOW)
 
     assert claims.get(record.id) is None
+
+
+@pytest.mark.parametrize("now", [EXPIRED_EXPIRY, NOW])
+def test_release_rejects_expired_claim_at_and_after_expiry(persistence, now: str) -> None:
+    claims, rounds = persistence
+    record = make_round()
+    existing = make_claim(lease_expires_at=EXPIRED_EXPIRY)
+    rounds.create(record)
+    claims.claim(record.id, existing, CLAIMED_AT)
+
+    with pytest.raises(StaleAttemptTokenError):
+        claims.release(record.id, existing.attempt_token, now)
+
+    assert claims.get(record.id).dict() == existing.dict()
 
 
 def test_replace_round_and_release_is_atomic(persistence) -> None:
@@ -195,10 +247,46 @@ def test_replace_round_and_release_is_atomic(persistence) -> None:
     rounds.create(record)
     claims.claim(record.id, existing, NOW)
 
-    claims.replace_round_and_release(replacement, existing.attempt_token)
+    claims.replace_round_and_release(replacement, existing.attempt_token, NOW)
 
     assert rounds.get(record.id).dict() == replacement.dict()
     assert claims.get(record.id) is None
+
+
+@pytest.mark.parametrize("now", [EXPIRED_EXPIRY, NOW])
+@pytest.mark.parametrize(
+    ("state", "changes"),
+    [
+        (GameState.GENERATED_REVEAL, {"generated_at": NOW}),
+        (
+            GameState.GENERATING,
+            {
+                "pipeline_failure": FailureDetail(
+                    code="provider_error",
+                    message="retry later",
+                ),
+            },
+        ),
+    ],
+)
+def test_expired_claim_cannot_finalize_or_fail_round(
+    persistence,
+    now: str,
+    state: GameState,
+    changes: dict[str, object],
+) -> None:
+    claims, rounds = persistence
+    record = make_round()
+    replacement = RoundRecord(**{**record.dict(), "state": state, **changes})
+    existing = make_claim(lease_expires_at=EXPIRED_EXPIRY)
+    rounds.create(record)
+    claims.claim(record.id, existing, CLAIMED_AT)
+
+    with pytest.raises(StaleAttemptTokenError):
+        claims.replace_round_and_release(replacement, existing.attempt_token, now)
+
+    assert rounds.get(record.id).dict() == record.dict()
+    assert claims.get(record.id).dict() == existing.dict()
 
 
 def test_replace_round_and_clear_claim_works_without_an_attempt(persistence) -> None:
@@ -238,7 +326,7 @@ def test_cleared_attempt_rejects_a_late_token_commit(persistence) -> None:
     claims.replace_round_and_clear_claim(replacement)
 
     with pytest.raises(StaleAttemptTokenError):
-        claims.replace_round_and_release(record, existing.attempt_token)
+        claims.replace_round_and_release(record, existing.attempt_token, NOW)
     assert rounds.get(record.id).dict() == replacement.dict()
 
 
@@ -253,7 +341,7 @@ def test_stale_token_cannot_commit_after_claim_replacement(persistence) -> None:
 
     replacement = RoundRecord(**{**record.dict(), "state": GameState.GENERATED_REVEAL})
     with pytest.raises(StaleAttemptTokenError):
-        claims.replace_round_and_release(replacement, old_claim.attempt_token)
+        claims.replace_round_and_release(replacement, old_claim.attempt_token, NOW)
 
     assert rounds.get(record.id).dict() == record.dict()
     assert claims.get(record.id).dict() == new_claim.dict()

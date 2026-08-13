@@ -485,7 +485,12 @@ class GameRoundService:
             generated_at=timestamp,
             reveal_deadline=(self._as_datetime(timestamp) + _REVEAL_DURATION).isoformat(),
         )
-        await self._replace_and_release(claims, replacement, claim.attempt_token)
+        await self._replace_and_release(
+            claims,
+            replacement,
+            claim.attempt_token,
+            timestamp,
+        )
         return replacement
 
     async def _persist_generation_failure(
@@ -518,7 +523,12 @@ class GameRoundService:
             completed_at=None,
             terminal_disposition=None,
         )
-        await self._replace_and_release(claims, replacement, claim.attempt_token)
+        await self._replace_and_release(
+            claims,
+            replacement,
+            claim.attempt_token,
+            timestamp,
+        )
         return replacement
 
     async def _replace_and_release(
@@ -526,9 +536,15 @@ class GameRoundService:
         claims: ShelfDbGenerationClaims,
         record: RoundRecord,
         attempt_token: str,
+        now: str,
     ) -> None:
         try:
-            await asyncio.to_thread(claims.replace_round_and_release, record, attempt_token)
+            await asyncio.to_thread(
+                claims.replace_round_and_release,
+                record,
+                attempt_token,
+                now,
+            )
         except StaleAttemptTokenError as error:
             raise GameRoundConflictError("generation attempt is stale") from error
 

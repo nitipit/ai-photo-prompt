@@ -81,16 +81,30 @@ class ShelfDbGenerationClaims:
             return None
         return _reconstruct_claim(payload, round_id)
 
-    def renew(self, round_id: str, attempt_token: str, lease_expires_at: str) -> AttemptClaim:
-        """Extend a matching claim without changing its owner or claim timestamp."""
+    def renew(
+        self,
+        round_id: str,
+        attempt_token: str,
+        lease_expires_at: str,
+        now: str,
+    ) -> AttemptClaim:
+        """Extend a matching live claim without changing its owner or claim timestamp."""
 
         expiry = _parse_utc_timestamp(lease_expires_at, "lease_expires_at")
+        now_value = _parse_utc_timestamp(now, "now")
         with self._write_lock, self._db.transaction(write=True) as transaction:
             shelf = transaction.shelf(_CLAIMS_SHELF)
-            existing = _require_matching_claim(shelf, round_id, attempt_token)
+            existing = _require_live_matching_claim(
+                shelf,
+                round_id,
+                attempt_token,
+                now_value,
+            )
             claimed_at = _parse_utc_timestamp(existing.claimed_at, "claimed_at")
             if expiry <= claimed_at:
                 raise ValueError("lease_expires_at must be after claimed_at")
+            if expiry <= now_value:
+                raise ValueError("lease_expires_at must be after now")
 
             renewed = AttemptClaim(
                 {
@@ -101,24 +115,36 @@ class ShelfDbGenerationClaims:
             shelf.put(round_id, renewed.dict())
         return renewed
 
-    def release(self, round_id: str, attempt_token: str) -> None:
-        """Delete only the claim owned by ``attempt_token``."""
+    def release(self, round_id: str, attempt_token: str, now: str) -> None:
+        """Delete only a live claim owned by ``attempt_token``."""
 
+        now_value = _parse_utc_timestamp(now, "now")
         with self._write_lock, self._db.transaction(write=True) as transaction:
             shelf = transaction.shelf(_CLAIMS_SHELF)
-            _require_matching_claim(shelf, round_id, attempt_token)
+            _require_live_matching_claim(shelf, round_id, attempt_token, now_value)
             shelf.key(round_id).delete()
 
-    def replace_round_and_release(self, record: RoundRecord, attempt_token: str) -> None:
-        """Replace a validated round and delete its matching generation claim atomically."""
+    def replace_round_and_release(
+        self,
+        record: RoundRecord,
+        attempt_token: str,
+        now: str,
+    ) -> None:
+        """Replace a round and delete its matching live claim atomically."""
 
         validated_record = _validate_record(record)
+        now_value = _parse_utc_timestamp(now, "now")
         with self._write_lock, self._db.transaction(write=True) as transaction:
             round_shelf = transaction.shelf(_ROUNDS_SHELF)
             _read_round(round_shelf, validated_record.id)
 
             claim_shelf = transaction.shelf(_CLAIMS_SHELF)
-            _require_matching_claim(claim_shelf, validated_record.id, attempt_token)
+            _require_live_matching_claim(
+                claim_shelf,
+                validated_record.id,
+                attempt_token,
+                now_value,
+            )
             round_shelf.put(validated_record.id, validated_record.dict())
             claim_shelf.key(validated_record.id).delete()
 
@@ -159,6 +185,18 @@ def _require_matching_claim(shelf: Any, round_id: str, attempt_token: str) -> At
         raise StaleAttemptTokenError(f"stale attempt token for round: {round_id}")
     claim = _reconstruct_claim(payload, round_id)
     if claim.attempt_token != attempt_token:
+        raise StaleAttemptTokenError(f"stale attempt token for round: {round_id}")
+    return claim
+
+
+def _require_live_matching_claim(
+    shelf: Any,
+    round_id: str,
+    attempt_token: str,
+    now: datetime,
+) -> AttemptClaim:
+    claim = _require_matching_claim(shelf, round_id, attempt_token)
+    if _parse_utc_timestamp(claim.lease_expires_at, "lease_expires_at") <= now:
         raise StaleAttemptTokenError(f"stale attempt token for round: {round_id}")
     return claim
 
