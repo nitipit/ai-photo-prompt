@@ -28,6 +28,10 @@
           box-sizing: border-box;
         }
 
+        [hidden] {
+          display: none !important;
+        }
+
         :host {
           --navy-950: #071a2d;
           --navy-900: #0c2941;
@@ -820,6 +824,14 @@
 
         .generating-status h1 {
           font-size: clamp(1.8rem, 3.4vw, 3.6rem);
+        }
+
+        .generating-failure-layout .generating-status {
+          padding-top: 0.35rem;
+        }
+
+        .generating-failure-layout .generating-status h1 {
+          line-height: 1.18;
         }
 
         .generating-status-message {
