@@ -73,7 +73,7 @@ def test_ready_starts_a_real_round_and_reaches_prompt(runtime_app) -> None:
         assert 'name="challenge_id"' not in prompt.text
 
 
-def test_persisted_setup_reaches_existing_temporary_generating_result_and_leaderboard(
+def test_persisted_generation_reveals_artifact_and_allows_temporary_result(
     runtime_app,
 ) -> None:
     prompt_text = "กระต่ายเชฟทำแพนเค้กยักษ์"
@@ -93,35 +93,47 @@ def test_persisted_setup_reaches_existing_temporary_generating_result_and_leader
         assert generating_location.path == f"/rounds/{round_id}/generating"
         assert parse_qs(generating_location.query)["prompt"] == [prompt_text]
 
-        generating = client.get(submitted.headers["location"])
-        assert generating.status_code == 200
-        assert 'data-scene="generating"' in generating.text
-        assert 'data-fake-generated-placeholder="true"' in generating.text
+        waiting = client.get(f"{generating_location.path}?prompt=tampered")
+        assert waiting.status_code == 200
+        assert 'data-generating-state="waiting"' in waiting.text
+        assert 'action="/rounds/' + round_id + '/generating/run"' in waiting.text
+        assert 'name="challenge_id"' not in waiting.text
+        assert 'name="prompt"' not in waiting.text
+        assert (
+            client.post(
+                f"/rounds/{round_id}/generating/continue", follow_redirects=False
+            ).status_code
+            == 409
+        )
+
+        run = client.post(
+            f"/rounds/{round_id}/generating/run",
+            data={"challenge_id": "tampered", "prompt": "tampered"},
+            follow_redirects=False,
+        )
+        assert run.status_code == 303
+        assert run.headers["location"] == f"/rounds/{round_id}/generating"
+
+        generated = client.get(run.headers["location"])
+        assert generated.status_code == 200
+        assert 'data-generating-state="generated"' in generated.text
+        assert 'data-generated-artifact="true"' in generated.text
+        assert 'data-provider="fake-ai"' in generated.text
+        assert "fake-ai · โหมดสาธิต" in generated.text
+        assert 'data-reveal-deadline="' in generated.text
+        assert 'data-generated-score="79"' in generated.text
+        assert 'name="challenge_id"' not in generated.text
+        assert 'name="prompt"' not in generated.text
 
         continue_response = client.post(
             f"/rounds/{round_id}/generating/continue",
+            data={"challenge_id": "tampered", "prompt": "tampered"},
             follow_redirects=False,
         )
         assert continue_response.status_code == 303
         result_location = urlsplit(continue_response.headers["location"])
         assert result_location.path == f"/rounds/{round_id}/result"
-
         result = client.get(continue_response.headers["location"])
         assert result.status_code == 200
         assert 'data-scene="result"' in result.text
         assert 'data-demo-score="82"' in result.text
-
-        leaderboard_redirect = client.post(
-            f"/rounds/{round_id}/result/leaderboard",
-            data={
-                "challenge_id": parse_qs(generating_location.query)["challenge_id"][0],
-                "prompt": prompt_text,
-                "score": "82",
-            },
-            follow_redirects=False,
-        )
-        assert leaderboard_redirect.status_code == 303
-        leaderboard = client.get(leaderboard_redirect.headers["location"])
-        assert leaderboard.status_code == 200
-        assert 'data-scene="leaderboard"' in leaderboard.text
-        assert "รอบนี้ได้อันดับ 2" in leaderboard.text

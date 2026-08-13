@@ -3,8 +3,11 @@ endblock %} {% block content %}
 <main
   class="scene generating-scene"
   data-scene="generating"
-  data-generating-state="{% if failure %}failure{% else %}success{% endif %}"
+  data-generating-state="{% if failure %}failure{% elif generating_state == 'generated_reveal' %}generated{% else %}waiting{% endif %}"
+  data-round-state="{{ generating_state }}"
+  data-reveal-deadline="{{ reveal_deadline or '' }}"
 >
+  <meta name="generation-prompt" value="{{ prompt }}" />
   <header class="scene-topbar">
     <a class="brand" href="/" aria-label="กลับหน้าพร้อมเล่น">
       <span class="brand-mark" aria-hidden="true">✦</span>
@@ -33,15 +36,13 @@ endblock %} {% block content %}
         <span class="failure-mark" aria-hidden="true">!</span>
         <div>
           <strong>ภาพยังไม่พร้อมในครั้งนี้</strong>
-          <p>ลองสร้างใหม่อีกครั้ง หรือออกจากรอบเพื่อกลับไปหน้าพร้อมเล่น</p>
+          <p>{{ failure.message }}</p>
         </div>
       </div>
     </section>
 
     <div class="generating-bottom-action generating-failure-actions">
       <form action="/rounds/{{ round_id }}/generating/retry" method="post">
-        <input type="hidden" name="challenge_id" value="{{ challenge.id }}" />
-        <input type="hidden" name="prompt" value="{{ prompt }}" />
         <kiosk-button>
           <button id="retry-generating-button" type="submit">
             ลองอีกครั้ง <span aria-hidden="true">↻</span>
@@ -49,8 +50,6 @@ endblock %} {% block content %}
         </kiosk-button>
       </form>
       <form action="/rounds/{{ round_id }}/generating/exit" method="post">
-        <input type="hidden" name="challenge_id" value="{{ challenge.id }}" />
-        <input type="hidden" name="prompt" value="{{ prompt }}" />
         <button
           class="secondary-button"
           id="exit-generating-button"
@@ -58,6 +57,61 @@ endblock %} {% block content %}
         >
           ออกจากรอบ
         </button>
+      </form>
+    </div>
+  </div>
+  {% elif generating_state == "generated_reveal" %}
+  <div class="generating-layout">
+    <section class="generating-status" aria-labelledby="generating-title">
+      <p class="eyebrow">ภาพของคุณพร้อมแล้ว</p>
+      <h1 id="generating-title">
+        เก่งมาก!<br /><span>ภาพจากคำสั่งของคุณ</span>
+      </h1>
+      <p
+        id="generating-status-message"
+        class="generating-status-message"
+        role="status"
+        aria-live="polite"
+        data-generated-score="{{ score.total_score }}"
+      >
+        คะแนนจากการประเมิน {{ score.total_score }}/100
+      </p>
+    </section>
+
+    <section class="generating-hero" aria-label="ภาพที่สร้างจากคำสั่ง">
+      <div class="generating-frame">
+        <img
+          id="generating-image"
+          class="generating-image"
+          src="{{ generated_artifact.url }}"
+          alt="ภาพที่สร้างจากคำสั่งของคุณ"
+          data-generated-artifact="true"
+          data-provider="{{ generated_artifact.provider or '' }}"
+        />
+        {% if generated_artifact.provider == "fake-ai" %}
+        <span
+          id="generating-provider-badge"
+          class="generating-placeholder-badge"
+          data-provider-label="fake-ai"
+        >
+          fake-ai · โหมดสาธิต
+        </span>
+        {% endif %}
+      </div>
+    </section>
+
+    <div class="generating-bottom-action">
+      <p id="generating-next-message">กำลังพาไปต่อในอีกสักครู่</p>
+      <form
+        id="generating-continue-form"
+        action="/rounds/{{ round_id }}/generating/continue"
+        method="post"
+      >
+        <kiosk-button>
+          <button id="continue-generating-button" type="submit">
+            ไปต่อ <span aria-hidden="true">→</span>
+          </button>
+        </kiosk-button>
       </form>
     </div>
   </div>
@@ -74,7 +128,7 @@ endblock %} {% block content %}
         role="status"
         aria-live="polite"
       >
-        กำลังเตรียมภาพตัวอย่าง...
+        กดปุ่มเพื่อเริ่มสร้างภาพ
       </p>
     </section>
 
@@ -88,38 +142,26 @@ endblock %} {% block content %}
           <span class="generating-spinner"></span>
           <p>กำลังประมวลผล</p>
         </div>
-        <!-- Explicit fake generated placeholder for this temporary seam; not provider output. -->
         <img
-          id="generating-image"
-          class="generating-image"
+          id="generating-target-reference"
           src="{{ challenge.target_asset_url }}"
-          alt="ภาพตัวอย่างที่สร้างจากโจทย์นี้"
-          data-fake-generated-placeholder="true"
-          data-placeholder-source="selected-target-asset"
+          alt="ภาพโจทย์สำหรับรอบนี้"
+          data-image-source="selected-target-asset"
           hidden
         />
-        <span
-          id="generating-placeholder-badge"
-          class="generating-placeholder-badge"
-          hidden
-        >
-          ภาพตัวอย่างชั่วคราว
-        </span>
       </div>
     </section>
 
     <div class="generating-bottom-action">
-      <p id="generating-next-message">ระบบจะพาไปต่ออัตโนมัติเมื่อภาพพร้อม</p>
+      <p id="generating-next-message">ระบบจะเริ่มสร้างภาพเมื่อกดปุ่ม</p>
       <form
-        id="generating-continue-form"
-        action="/rounds/{{ round_id }}/generating/continue"
+        id="generating-run-form"
+        action="/rounds/{{ round_id }}/generating/run"
         method="post"
       >
-        <input type="hidden" name="challenge_id" value="{{ challenge.id }}" />
-        <input type="hidden" name="prompt" value="{{ prompt }}" />
         <kiosk-button>
-          <button id="continue-generating-button" type="submit" hidden>
-            ไปต่อ <span aria-hidden="true">→</span>
+          <button id="run-generating-button" type="submit">
+            เริ่มสร้างภาพ <span aria-hidden="true">→</span>
           </button>
         </kiosk-button>
       </form>

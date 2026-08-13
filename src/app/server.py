@@ -17,7 +17,12 @@ from .ai import FakeAIPipeline
 from .config import DEFAULT_CATALOG_PATH, DEFAULT_DB_PATH, DIST_DIR
 from .content.repository import ChallengeCatalog
 from .domain.models import ChallengeSpec, GameState, LevelGroup, PromptSubmissionReason
-from .persistence import RoundNotFoundError, ShelfDbGenerationClaims, ShelfDbRoundRepository
+from .persistence import (
+    GenerationAlreadyRunningError,
+    RoundNotFoundError,
+    ShelfDbGenerationClaims,
+    ShelfDbRoundRepository,
+)
 from .services import (
     GameRoundConflictError,
     GameRoundDeadlineError,
@@ -260,52 +265,78 @@ async def submit_prompt(
 
 
 @app.get("/rounds/{round_id}/generating", response_class=HTMLResponse)
-async def generating_scene(
-    request: Request,
-    round_id: str,
-    challenge_id: str | None = None,
-    prompt: str | None = None,
-    failure: str | None = None,
-):
-    """Render the temporary Generating scene from persisted setup context."""
+async def generating_scene(request: Request, round_id: str):
+    """Render the persisted generation state and its server-owned context."""
 
-    record = await _get_scene_round(request, round_id, GameState.GENERATING)
-    challenge, stored_prompt = _generation_context(request, record)
-    return render_generating(
-        request,
-        round_id,
-        challenge,
-        stored_prompt,
-        failure=failure == "1",
+    record = await _require_round_context(request, round_id)
+    if record.state is GameState.GENERATING:
+        challenge, prompt = _generation_context(request, record)
+        return render_generating(
+            request,
+            round_id,
+            challenge,
+            prompt,
+            state=record.state,
+            failure=record.pipeline_failure,
+        )
+    if record.state is GameState.GENERATED_REVEAL:
+        challenge, prompt = _generation_context(request, record)
+        if (
+            record.generated_artifact is None
+            or record.score is None
+            or record.reveal_deadline is None
+        ):
+            raise HTTPException(status_code=409, detail="Generated round is missing reveal data")
+        return render_generating(
+            request,
+            round_id,
+            challenge,
+            prompt,
+            state=record.state,
+            generated_artifact=record.generated_artifact,
+            score=record.score,
+            reveal_deadline=record.reveal_deadline,
+        )
+    raise HTTPException(
+        status_code=409,
+        detail=f"Round is in {record.state.value}, not a generating state",
     )
+
+
+@app.post("/rounds/{round_id}/generating/run", status_code=303)
+async def run_generation(request: Request, round_id: str) -> RedirectResponse:
+    """Start one service-owned generation attempt and return to its scene."""
+
+    return await _run_generation(request, round_id)
 
 
 @app.post("/rounds/{round_id}/generating/retry", status_code=303)
-async def retry_demo_generation(request: Request, round_id: str) -> RedirectResponse:
-    """Retry the temporary Generating scene using stored challenge and prompt."""
+async def retry_generation(request: Request, round_id: str) -> RedirectResponse:
+    """Retry generation through the same service-owned execution route."""
 
-    record = await _get_scene_round(request, round_id, GameState.GENERATING)
-    challenge, prompt = _generation_context(request, record)
-    return RedirectResponse(
-        url=_generating_url(round_id, challenge.id, prompt),
-        status_code=303,
-    )
+    return await _run_generation(request, round_id)
 
 
 @app.post("/rounds/{round_id}/generating/exit", status_code=303)
-async def exit_demo_generation(request: Request, round_id: str) -> RedirectResponse:
-    """Exit the temporary failure state without creating a result or score."""
+async def exit_generation(request: Request, round_id: str) -> RedirectResponse:
+    """Abandon generation through the service, fencing any late completion."""
 
-    record = await _get_scene_round(request, round_id, GameState.GENERATING)
-    _generation_context(request, record)
+    try:
+        await request.app.state.game_round_service.abandon_generation(round_id)
+    except RoundNotFoundError as error:
+        raise HTTPException(status_code=404, detail="Round not found") from error
+    except GameRoundValidationError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    except GameRoundConflictError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
     return RedirectResponse(url="/", status_code=303)
 
 
 @app.post("/rounds/{round_id}/generating/continue", status_code=303)
-async def continue_demo_generation(request: Request, round_id: str) -> RedirectResponse:
-    """Redirect to the temporary Result scene with stored generation context."""
+async def continue_generation(request: Request, round_id: str) -> RedirectResponse:
+    """Enter the existing temporary Result only after persisted generation reveal."""
 
-    record = await _get_scene_round(request, round_id, GameState.GENERATING)
+    record = await _get_scene_round(request, round_id, GameState.GENERATED_REVEAL)
     challenge, prompt = _generation_context(request, record)
     return RedirectResponse(
         url=_result_url(round_id, challenge.id, prompt),
@@ -418,16 +449,16 @@ def _validate_prompt(prompt: str) -> None:
 
 
 def _generating_url(round_id: str, challenge_id: str, prompt: str) -> str:
-    """Build the explicitly temporary, URL-encoded visible-slice handoff."""
+    """Build the URL-encoded setup handoff; the GET route ignores its context."""
 
     query = urlencode({"challenge_id": challenge_id, "prompt": prompt})
     return f"/rounds/{round_id}/generating?{query}"
 
 
 def _result_url(round_id: str, challenge_id: str, prompt: str) -> str:
-    """Build the URL-encoded handoff into the temporary Result scene."""
+    """Build the URL-encoded handoff into the existing temporary Result scene."""
 
-    query = urlencode({"challenge_id": challenge_id, "prompt": prompt})
+    query = urlencode({"challenge_id": challenge_id, "prompt": prompt, "score": DEMO_SCORE})
     return f"/rounds/{round_id}/result?{query}"
 
 
@@ -449,6 +480,22 @@ def _leaderboard_url(
         }
     )
     return f"/rounds/{round_id}/leaderboard?{query}"
+
+
+async def _run_generation(request: Request, round_id: str) -> RedirectResponse:
+    """Map one generation attempt's service outcomes to the native route contract."""
+
+    try:
+        await request.app.state.game_round_service.generate_round(round_id)
+    except RoundNotFoundError as error:
+        raise HTTPException(status_code=404, detail="Round not found") from error
+    except GenerationAlreadyRunningError as error:
+        raise HTTPException(status_code=409, detail="Generation already running") from error
+    except GameRoundValidationError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    except GameRoundConflictError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    return RedirectResponse(url=f"/rounds/{round_id}/generating", status_code=303)
 
 
 async def _require_round_context(request: Request, round_id: str):

@@ -4,6 +4,7 @@ from fastapi import Request
 from fastapi.templating import Jinja2Templates
 
 from .config import TEMPLATE_DIR
+from .domain.models import FailureDetail, GameState, ImageArtifact, ScoreResult
 
 templates = Jinja2Templates(directory=TEMPLATE_DIR)
 templates.env.auto_reload = True
@@ -89,9 +90,13 @@ def render_generating(
     challenge,
     prompt: str,
     *,
-    failure: bool = False,
+    state: GameState,
+    failure: FailureDetail | None = None,
+    generated_artifact: ImageArtifact | None = None,
+    score: ScoreResult | None = None,
+    reveal_deadline: str | None = None,
 ):
-    """Render the temporary progress, reveal, or retry state for one prompt."""
+    """Render waiting, persisted failure, or persisted generated reveal state."""
 
     return templates.TemplateResponse(
         request=request,
@@ -100,7 +105,11 @@ def render_generating(
             "round_id": round_id,
             "challenge": challenge,
             "prompt": prompt,
+            "generating_state": state.value,
             "failure": failure,
+            "generated_artifact": generated_artifact,
+            "score": score,
+            "reveal_deadline": reveal_deadline,
         },
     )
 
