@@ -155,8 +155,7 @@ def test_result_flow_uses_persisted_lifecycle_and_ignores_tampering(runtime_app)
         assert len(result_record.feedback) == 3
 
         result = client.get(
-            f"/rounds/{round_id}/result"
-            "?challenge_id=attacker&prompt=attacker&score=82&level=m4-m6"
+            f"/rounds/{round_id}/result?challenge_id=attacker&prompt=attacker&score=82&level=m4-m6"
         )
         assert result.status_code == 200
         assert f'src="{result_record.generated_artifact.url}"' in result.text
@@ -185,9 +184,10 @@ def test_result_flow_uses_persisted_lifecycle_and_ignores_tampering(runtime_app)
         assert completed.state is GameState.LEADERBOARD
         assert completed.terminal_disposition is TerminalDisposition.COMPLETED
         assert completed.completed_at is not None
-        assert completed.leaderboard_deadline == (
-            datetime.fromisoformat(completed.completed_at) + timedelta(seconds=15)
-        ).isoformat()
+        assert (
+            completed.leaderboard_deadline
+            == (datetime.fromisoformat(completed.completed_at) + timedelta(seconds=15)).isoformat()
+        )
         assert completed.generated_artifact.dict() == result_record.generated_artifact.dict()
         assert completed.score.dict() == result_record.score.dict()
         assert completed.feedback == result_record.feedback

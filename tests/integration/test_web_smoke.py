@@ -127,9 +127,7 @@ def test_persisted_generation_reveals_artifact_and_reaches_result(
         assert 'name="challenge_id"' not in generated.text
         assert 'name="prompt"' not in generated.text
 
-        generated_record = asyncio.run(
-            runtime_app.state.game_round_service.get_round(round_id)
-        )
+        generated_record = asyncio.run(runtime_app.state.game_round_service.get_round(round_id))
         assert generated_record.reveal_deadline is not None
         runtime_app.state.game_round_service._utc_clock = lambda: datetime.fromisoformat(
             generated_record.reveal_deadline
@@ -158,9 +156,7 @@ def test_persisted_generation_reveals_artifact_and_reaches_result(
         )
         assert completed.status_code == 303
         assert completed.headers["location"] == f"/rounds/{round_id}/leaderboard"
-        leaderboard_record = asyncio.run(
-            runtime_app.state.game_round_service.get_round(round_id)
-        )
+        leaderboard_record = asyncio.run(runtime_app.state.game_round_service.get_round(round_id))
         assert leaderboard_record.leaderboard_deadline is not None
 
         leaderboard = client.get(
