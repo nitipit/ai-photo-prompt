@@ -9,8 +9,8 @@ deno task app:build
 deno task app:serve
 ```
 
-Open <http://127.0.0.1:8000/>. Press **เริ่มเล่น** to follow the temporary
-`/rounds/demo/level` seam to Level Selection.
+Open <http://127.0.0.1:8000/>. Press **เริ่มเล่น** to create a persisted
+round through `POST /rounds`; the server redirects its UUID to Level Selection.
 
 Focused checks (build first so generated challenge assets are available):
 
