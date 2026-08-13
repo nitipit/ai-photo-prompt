@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from pathlib import Path
 
 import pytest
@@ -10,7 +11,12 @@ from shelfdb.shelf import DB  # type: ignore[import-untyped]
 from app.ai import FakeAIPipeline
 from app.content.repository import CatalogValidationError, ChallengeCatalog
 from app.domain.models import LevelGroup
-from app.persistence import ShelfDbGenerationClaims, ShelfDbRoundRepository
+from app.persistence import (
+    ChallengeNotFoundError,
+    ShelfDbChallengeRepository,
+    ShelfDbGenerationClaims,
+    ShelfDbRoundRepository,
+)
 from app.server import app
 from app.services import GameRoundService
 
@@ -29,6 +35,7 @@ def test_lifespan_exposes_typed_runtime_state_and_closes_db(runtime_app) -> None
     with TestClient(runtime_app):
         assert isinstance(runtime_app.state.db, DB)
         assert isinstance(runtime_app.state.catalog, ChallengeCatalog)
+        assert isinstance(runtime_app.state.challenge_repository, ShelfDbChallengeRepository)
         assert isinstance(runtime_app.state.round_repository, ShelfDbRoundRepository)
         assert isinstance(runtime_app.state.generation_claims, ShelfDbGenerationClaims)
         assert isinstance(runtime_app.state.game_round_service, GameRoundService)
@@ -38,6 +45,7 @@ def test_lifespan_exposes_typed_runtime_state_and_closes_db(runtime_app) -> None
     for name in (
         "db",
         "catalog",
+        "challenge_repository",
         "round_repository",
         "generation_claims",
         "game_round_service",
@@ -65,6 +73,32 @@ def test_service_round_survives_lifespan_reopen(runtime_app) -> None:
         rebuilt = asyncio.run(runtime_app.state.game_round_service.get_round(created.id))
 
     assert rebuilt.dict() == configured.dict()
+
+
+def test_lifespan_sync_removes_stale_challenge_ids_on_catalog_change(
+    runtime_app,
+    tmp_path: Path,
+    materialized_catalog,
+) -> None:
+    changed_payload = json.loads(materialized_catalog.catalog_path.read_text(encoding="utf-8"))
+    changed = next(
+        challenge for challenge in changed_payload["challenges"] if challenge["id"] == "p1-p3-01"
+    )
+    changed["id"] = "p1-p3-01-replacement"
+    changed["target_asset_url"] = "/assets/challenges/p1-p3-01-replacement.webp"
+    changed_catalog_path = tmp_path / "changed-catalog.json"
+    changed_catalog_path.write_text(json.dumps(changed_payload), encoding="utf-8")
+
+    with TestClient(runtime_app):
+        assert runtime_app.state.challenge_repository.get("p1-p3-01").id == "p1-p3-01"
+
+    runtime_app.state.catalog_path = changed_catalog_path
+    with TestClient(runtime_app):
+        repository = runtime_app.state.challenge_repository
+        with pytest.raises(ChallengeNotFoundError):
+            repository.get("p1-p3-01")
+        assert repository.get("p1-p3-01-replacement").id == "p1-p3-01-replacement"
+        assert len(repository.all()) == 20
 
 
 def test_missing_catalog_fails_startup_without_opening_db(tmp_path: Path) -> None:

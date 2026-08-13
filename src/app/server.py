@@ -17,8 +17,11 @@ from .config import DEFAULT_CATALOG_PATH, DEFAULT_DB_PATH, DIST_DIR
 from .content.repository import ChallengeCatalog
 from .domain.models import ChallengeSpec, GameState, PromptSubmissionReason
 from .persistence import (
+    ChallengeNotFoundError,
+    ChallengeRepositoryError,
     GenerationAlreadyRunningError,
     RoundNotFoundError,
+    ShelfDbChallengeRepository,
     ShelfDbGenerationClaims,
     ShelfDbRoundRepository,
 )
@@ -47,14 +50,18 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
     db_path = Path(getattr(application.state, "db_path", DEFAULT_DB_PATH))
     db: DB | None = None
     try:
-        catalog = ChallengeCatalog.load(catalog_path)
+        source_catalog = ChallengeCatalog.load(catalog_path)
         db_path.parent.mkdir(parents=True, exist_ok=True)
         db = DB(str(db_path))
+        challenge_repository = ShelfDbChallengeRepository(db)
+        challenge_repository.sync(source_catalog)
+        runtime_catalog = ChallengeCatalog.from_repository(challenge_repository)
+        runtime_catalog.all()
         round_repository = ShelfDbRoundRepository(db)
         generation_claims = ShelfDbGenerationClaims(db)
         game_round_service = GameRoundService(
             round_repository,
-            catalog,
+            runtime_catalog,
             _select_challenge,
             _utc_now,
             generation_claims=generation_claims,
@@ -62,7 +69,8 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
             owner_instance=str(uuid4()),
         )
         application.state.db = db
-        application.state.catalog = catalog
+        application.state.catalog = runtime_catalog
+        application.state.challenge_repository = challenge_repository
         application.state.round_repository = round_repository
         application.state.generation_claims = generation_claims
         application.state.game_round_service = game_round_service
@@ -75,6 +83,7 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
             for name in (
                 "db",
                 "catalog",
+                "challenge_repository",
                 "round_repository",
                 "generation_claims",
                 "game_round_service",
@@ -439,8 +448,10 @@ def _generation_context(request: Request, record):
 def _get_challenge(request: Request, challenge_id: str):
     try:
         return request.app.state.catalog.get(challenge_id)
-    except KeyError as error:
+    except (KeyError, ChallengeNotFoundError) as error:
         raise HTTPException(status_code=404, detail="Challenge not found") from error
+    except ChallengeRepositoryError as error:
+        raise HTTPException(status_code=422, detail="Stored challenge is invalid") from error
 
 
 # Keep SSR routes above this generated-browser fallback.

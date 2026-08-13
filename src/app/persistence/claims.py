@@ -40,7 +40,7 @@ class ShelfDbGenerationClaims:
         # ShelfDB rejects overlapping top-level writers on one shared environment.
         self._write_lock = _SHELFDB_WRITE_LOCK
         # Initialize the transient shelf so read-only operations work on an empty DB.
-        with self._db.transaction(write=True) as transaction:
+        with self._write_lock, self._db.transaction(write=True) as transaction:
             transaction.shelf(_CLAIMS_SHELF)
 
     def claim(self, round_id: str, claim: AttemptClaim, now: str) -> AttemptClaim:

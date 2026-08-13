@@ -1,5 +1,11 @@
 """Durable application persistence boundaries."""
 
+from .challenges import (
+    CHALLENGES_SHELF,
+    ChallengeNotFoundError,
+    ChallengeRepositoryError,
+    ShelfDbChallengeRepository,
+)
 from .claims import (
     GenerationAlreadyRunningError,
     RoundNotClaimableError,
@@ -14,11 +20,15 @@ from .rounds import (
 )
 
 __all__ = [
+    "CHALLENGES_SHELF",
+    "ChallengeNotFoundError",
+    "ChallengeRepositoryError",
     "GenerationAlreadyRunningError",
     "RoundConflictError",
     "RoundNotClaimableError",
     "RoundNotFoundError",
     "RoundSnapshotConflictError",
+    "ShelfDbChallengeRepository",
     "ShelfDbGenerationClaims",
     "ShelfDbRoundRepository",
     "StaleAttemptTokenError",

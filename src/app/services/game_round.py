@@ -20,7 +20,7 @@ from uuid import uuid4
 from statemachine.exceptions import TransitionNotAllowed
 
 from app.ai.results import AIPipelineResult
-from app.content.repository import ChallengeCatalog
+from app.content.repository import ChallengeSource
 from app.domain.models import (
     AttemptClaim,
     ChallengeSpec,
@@ -35,6 +35,7 @@ from app.domain.models import (
     TerminalDisposition,
 )
 from app.domain.state import RoundStateMachine
+from app.persistence.challenges import ChallengeNotFoundError, ChallengeRepositoryError
 from app.persistence.claims import (
     RoundNotClaimableError,
     ShelfDbGenerationClaims,
@@ -105,7 +106,7 @@ class GameRoundService:
     def __init__(
         self,
         repository: ShelfDbRoundRepository,
-        catalog: ChallengeCatalog,
+        catalog: ChallengeSource,
         challenge_selector: ChallengeSelector,
         utc_clock: UtcClock,
         *,
@@ -146,7 +147,10 @@ class GameRoundService:
 
         record = await self._get_record(round_id)
         selected_level = self._coerce_level(level)
-        candidates = self._catalog.for_level(selected_level)
+        try:
+            candidates = self._catalog.for_level(selected_level)
+        except ChallengeRepositoryError as error:
+            raise GameRoundValidationError("stored challenge catalog is invalid") from error
         challenge = self._select_challenge(candidates, selected_level)
 
         machine = RoundStateMachine.from_record(RoundRecord(record.dict()))
@@ -576,8 +580,10 @@ class GameRoundService:
             raise GameRoundValidationError("generating round is missing challenge or prompt")
         try:
             challenge = self._catalog.get(record.challenge_id)
-        except KeyError as error:
+        except (KeyError, ChallengeNotFoundError) as error:
             raise GameRoundValidationError("generating round has an unknown challenge") from error
+        except ChallengeRepositoryError as error:
+            raise GameRoundValidationError("stored challenge is invalid") from error
         return challenge, record.prompt
 
     @staticmethod

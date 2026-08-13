@@ -11,13 +11,14 @@ from .importer import (
     materialize_challenges,
     parse_challenge_bundle,
 )
-from .repository import CatalogValidationError, ChallengeCatalog
+from .repository import CatalogValidationError, ChallengeCatalog, ChallengeSource
 
 __all__ = [
     "CATALOG_FILENAME",
     "CHALLENGE_ASSET_DIRECTORY",
     "CatalogValidationError",
     "ChallengeCatalog",
+    "ChallengeSource",
     "EXPECTED_CHALLENGE_COUNT",
     "EXPECTED_CHALLENGES_PER_LEVEL",
     "ChallengeMaterializationError",

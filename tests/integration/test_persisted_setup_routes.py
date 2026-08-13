@@ -10,7 +10,7 @@ from uuid import UUID, uuid4
 import pytest
 from fastapi.testclient import TestClient
 
-from app.domain.models import GameState, TerminalDisposition
+from app.domain.models import ChallengeSpec, GameState, TerminalDisposition
 from app.server import app
 
 
@@ -93,6 +93,16 @@ def test_persisted_round_flow_stores_uuid_name_level_challenge_and_deadline(runt
         selected = runtime_app.state.catalog.get(configured.challenge_id)
         assert selected.level is configured.level
         assert selected.status.value == "approved"
+
+        persisted = list(runtime_app.state.challenge_repository.all())
+        selected_index = next(
+            index for index, challenge in enumerate(persisted) if challenge.id == selected.id
+        )
+        persisted[selected_index] = ChallengeSpec(
+            {**selected.dict(), "target_asset_url": "/assets/challenges/persisted-runtime.webp"}
+        )
+        runtime_app.state.challenge_repository.sync(persisted)
+        selected = runtime_app.state.catalog.get(configured.challenge_id)
 
         challenge = client.get(f"{challenge_url}?challenge_id=not-authoritative")
         assert challenge.status_code == 200
