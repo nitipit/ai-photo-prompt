@@ -1,0 +1,111 @@
+{% extends "_base.html" %} {% block title %}อันดับคะแนน | Photo Prompt{% endblock
+%} {% block content %}
+<main
+  class="scene leaderboard-scene"
+  data-scene="leaderboard"
+  data-leaderboard-data="deterministic-demo"
+  data-leaderboard-level="{{ level }}"
+  data-current-round="{{ round_id }}"
+>
+  <header class="scene-topbar">
+    <a class="brand" href="/" aria-label="กลับหน้าพร้อมเล่น">
+      <span class="brand-mark" aria-hidden="true">✦</span>
+      <span class="brand-name">PHOTO <strong>PROMPT</strong></span>
+    </a>
+    <p class="scene-tag">อันดับ · ระดับ {{ level }}</p>
+  </header>
+
+  <div class="leaderboard-layout">
+    <section class="leaderboard-heading" aria-labelledby="leaderboard-title">
+      <p class="eyebrow">ระดับ {{ level }} · ข้อมูลสาธิตชั่วคราว</p>
+      <h1 id="leaderboard-title">
+        อันดับคะแนน<br /><span>Leaderboard</span>
+      </h1>
+    </section>
+
+    <section
+      class="leaderboard-current"
+      aria-label="อันดับของรอบนี้"
+      data-current-entry="deterministic-demo"
+      data-entry-source="deterministic-demo-data"
+    >
+      <p
+        class="leaderboard-current-rank"
+        data-current-rank="{{ current_rank }}"
+      >
+        รอบนี้ได้อันดับ {{ current_rank }}
+      </p>
+      <p class="leaderboard-current-score" data-current-score="{{ score }}">
+        คะแนน {{ score }} / 100
+      </p>
+    </section>
+
+    <ol
+      class="leaderboard-list"
+      aria-label="ตารางอันดับระดับ {{ level }}"
+      data-leaderboard-list="deterministic-demo-data"
+      data-ranking="competition-fixed-demo"
+    >
+      {% for entry in rows %}
+      <li
+        class="leaderboard-row{% if entry.is_current %} leaderboard-row-current{% endif %}"
+        data-leaderboard-entry="deterministic-demo"
+        data-current-entry="{{ 'true' if entry.is_current else 'false' }}"
+        data-entry-source="deterministic-demo-data"
+      >
+        <div class="leaderboard-rank" data-entry-rank="{{ entry.rank }}">
+          อันดับ {{ entry.rank }}
+        </div>
+        <div class="leaderboard-image-frame">
+          <img
+            class="leaderboard-image"
+            src="{{ entry.image_url }}"
+            alt="ภาพตัวอย่างชั่วคราวของ {{ entry.name }}"
+            data-entry-image="true"
+            data-image-source="approved-challenge-target-placeholder"
+            data-temporary="true"
+            data-temporary-image-placeholder="true"
+          />
+          <span class="leaderboard-image-badge">ชั่วคราว</span>
+        </div>
+        <div class="leaderboard-details">
+          <strong class="leaderboard-name" data-entry-name="{{ entry.name }}">
+            {{ entry.name }}
+          </strong>
+          <p class="leaderboard-prompt" data-entry-prompt="true">
+            {{ entry.prompt }}
+          </p>
+        </div>
+        <div class="leaderboard-score" data-entry-score="{{ entry.score }}">
+          <strong>{{ entry.score }}</strong>
+          <span>/ 100</span>
+        </div>
+      </li>
+      {% endfor %}
+    </ol>
+
+    <div
+      class="leaderboard-bottom-action"
+      data-action-region="ready"
+      data-action-source="deterministic-demo"
+    >
+      <p>
+        กลับหน้าพร้อมเล่นใน
+        <strong class="leaderboard-countdown" data-leaderboard-countdown="15"
+        >15</strong>
+        วินาที
+      </p>
+      <a
+        id="ready-fallback-link"
+        class="leaderboard-ready-link"
+        href="/"
+        data-ready-fallback="true"
+      >
+        กลับหน้าพร้อมเล่น <span aria-hidden="true">→</span>
+      </a>
+    </div>
+  </div>
+</main>
+{% endblock %} {% block page_script %}
+<script type="module" src="/templates/leaderboard.js"></script>
+{% endblock %}

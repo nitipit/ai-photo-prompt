@@ -1,3 +1,4 @@
+import re
 from urllib.parse import parse_qs, urlsplit
 
 from fastapi.testclient import TestClient
@@ -256,26 +257,107 @@ def test_result_unknown_challenge_is_not_found() -> None:
         assert result.status_code == 404
 
 
-def test_leaderboard_seam_rejects_tampered_score_and_returns_exact_501() -> None:
+def test_leaderboard_redirects_with_encoded_context_and_rejects_tampering() -> None:
+    prompt = "กระต่ายเชฟ & สีฟ้า + 50%"
     data = {
         "challenge_id": "p1-p3-01",
-        "prompt": "กระต่ายเชฟทำแพนเค้กยักษ์",
+        "prompt": prompt,
+        "score": "82",
+        "level": "p1-p3",
     }
     with TestClient(app) as client:
-        tampered = client.post(
+        tampered_score = client.post(
             "/rounds/demo/result/leaderboard",
             data={**data, "score": "81"},
         )
-        assert tampered.status_code == 422
+        assert tampered_score.status_code == 422
 
-        seam = client.post(
+        tampered_level = client.post(
             "/rounds/demo/result/leaderboard",
-            data={**data, "score": "82"},
+            data={**data, "level": "p4-p6"},
         )
-        assert seam.status_code == 501
-        assert seam.json()["detail"] == (
-            "Leaderboard scene is not implemented in this temporary seam"
+        assert tampered_level.status_code == 422
+
+        redirect = client.post(
+            "/rounds/demo/result/leaderboard",
+            data=data,
+            follow_redirects=False,
         )
+        assert redirect.status_code == 303
+        location = urlsplit(redirect.headers["location"])
+        assert location.path == "/rounds/demo/leaderboard"
+        assert parse_qs(location.query) == {
+            "challenge_id": ["p1-p3-01"],
+            "prompt": [prompt],
+            "score": ["82"],
+            "level": ["p1-p3"],
+        }
+        assert "+" in location.query
+        assert "%" in location.query
+
+        fallback_form = client.post(
+            "/rounds/demo/result/leaderboard",
+            data={key: value for key, value in data.items() if key != "level"},
+            follow_redirects=False,
+        )
+        assert fallback_form.status_code == 303
+        assert "level=p1-p3" in fallback_form.headers["location"]
+
+
+def test_leaderboard_renders_competition_tie_current_prompt_and_ready_fallback() -> None:
+    prompt = "กระต่ายเชฟ & สีฟ้า + 50%"
+    with TestClient(app) as client:
+        leaderboard = client.get(
+            "/rounds/demo/leaderboard",
+            params={
+                "challenge_id": "p1-p3-01",
+                "prompt": prompt,
+                "score": "82",
+                "level": "p1-p3",
+            },
+        )
+
+        assert leaderboard.status_code == 200
+        assert 'data-scene="leaderboard"' in leaderboard.text
+        assert 'data-leaderboard-data="deterministic-demo"' in leaderboard.text
+        assert 'data-leaderboard-list="deterministic-demo-data"' in leaderboard.text
+        assert 'data-ranking="competition-fixed-demo"' in leaderboard.text
+        assert "รอบนี้ได้อันดับ 2" in leaderboard.text
+        assert "กระต่ายเชฟ &amp; สีฟ้า + 50%" in leaderboard.text
+        assert re.findall(r'data-entry-rank="(\d+)"', leaderboard.text) == ["1", "2", "2", "4"]
+        assert re.findall(r'data-entry-score="(\d+)"', leaderboard.text) == ["96", "82", "82", "74"]
+        assert leaderboard.text.count('data-leaderboard-entry="deterministic-demo"') == 4
+        assert leaderboard.text.count('data-entry-name="') == 4
+        assert leaderboard.text.count('data-entry-prompt="true"') == 4
+        assert leaderboard.text.count('data-entry-image="true"') == 4
+        assert leaderboard.text.count('data-temporary-image-placeholder="true"') == 4
+        assert 'data-current-entry="true"' in leaderboard.text
+        assert 'data-current-score="82"' in leaderboard.text
+        assert 'data-leaderboard-countdown="15"' in leaderboard.text
+        assert 'href="/"' in leaderboard.text
+        assert 'data-ready-fallback="true"' in leaderboard.text
+
+        tampered_score = client.get(
+            "/rounds/demo/leaderboard",
+            params={
+                "challenge_id": "p1-p3-01",
+                "prompt": prompt,
+                "score": "81",
+                "level": "p1-p3",
+            },
+        )
+        assert tampered_score.status_code == 422
+
+        tampered_level = client.get(
+            "/rounds/demo/leaderboard",
+            params={
+                "challenge_id": "p1-p3-01",
+                "prompt": prompt,
+                "score": "82",
+                "level": "p4-p6",
+            },
+        )
+        assert tampered_level.status_code == 422
 
 
 def test_prompt_unknown_challenge_is_not_found() -> None:

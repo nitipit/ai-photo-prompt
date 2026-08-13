@@ -29,6 +29,34 @@ def render_level_selection(request: Request, round_id: str):
     )
 
 
+def render_leaderboard(
+    request: Request,
+    round_id: str,
+    challenge,
+    prompt: str,
+    *,
+    score: int,
+    level: str,
+    current_rank: int,
+    rows,
+):
+    """Render the deterministic current-level leaderboard without persistence."""
+
+    return templates.TemplateResponse(
+        request=request,
+        name="leaderboard.html",
+        context={
+            "round_id": round_id,
+            "challenge": challenge,
+            "prompt": prompt,
+            "score": score,
+            "level": level,
+            "current_rank": current_rank,
+            "rows": rows,
+        },
+    )
+
+
 def render_challenge_reveal(request: Request, round_id: str, challenge):
     """Render the selected challenge image without exposing its design brief."""
 

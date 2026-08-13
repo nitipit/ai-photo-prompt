@@ -1198,6 +1198,238 @@
           font-size: clamp(0.66rem, 0.92vw, 0.82rem);
         }
 
+        .leaderboard-scene {
+          background:
+            radial-gradient(
+              circle at 50% 18%,
+              rgba(66, 214, 196, 0.14),
+              transparent 36%
+            ),
+            linear-gradient(145deg, var(--navy-950), var(--navy-900));
+        }
+
+        .leaderboard-layout {
+          display: grid;
+          grid-template-rows: auto auto minmax(0, 1fr) auto;
+          gap: 0.55rem;
+          height: 100%;
+          padding: 9.2% 5.5% 3.4%;
+        }
+
+        .leaderboard-heading {
+          text-align: center;
+        }
+
+        .leaderboard-heading .eyebrow {
+          margin-bottom: 0.25rem;
+        }
+
+        .leaderboard-heading h1 {
+          font-size: clamp(1.55rem, 2.8vw, 3rem);
+        }
+
+        .leaderboard-heading h1 span {
+          color: var(--coral);
+        }
+
+        .leaderboard-current {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          width: min(100%, 64rem);
+          justify-self: center;
+          gap: 1rem;
+          border: 1px solid rgba(247, 201, 91, 0.62);
+          border-radius: 0.95rem;
+          padding: 0.48rem 1rem;
+          background: rgba(247, 201, 91, 0.1);
+          box-shadow: 0 0.65rem 1.6rem rgba(0, 0, 0, 0.15);
+        }
+
+        .leaderboard-current p {
+          margin: 0;
+        }
+
+        .leaderboard-current-label {
+          color: var(--muted);
+          font-size: clamp(0.66rem, 0.9vw, 0.82rem);
+        }
+
+        .leaderboard-current-rank {
+          color: var(--gold);
+          font-size: clamp(1rem, 1.55vw, 1.35rem);
+          font-weight: 800;
+        }
+
+        .leaderboard-current-score {
+          color: var(--paper);
+          font-size: clamp(0.72rem, 1vw, 0.9rem);
+          font-weight: 700;
+        }
+
+        .leaderboard-list {
+          display: grid;
+          grid-template-rows: repeat(4, minmax(0, 1fr));
+          gap: 0.42rem;
+          width: min(100%, 64rem);
+          min-height: 0;
+          margin: 0 auto;
+          padding: 0.18rem 0 0;
+          overflow: hidden;
+          list-style: none;
+        }
+
+        .leaderboard-row {
+          display: grid;
+          grid-template-columns: 3.9rem 5.8rem minmax(0, 1fr) 5.5rem;
+          align-items: center;
+          gap: 0.75rem;
+          min-height: 0;
+          border: 1px solid rgba(157, 181, 189, 0.25);
+          border-radius: 0.82rem;
+          padding: 0.38rem 0.72rem;
+          background: rgba(12, 41, 65, 0.76);
+        }
+
+        .leaderboard-row-current {
+          border-color: rgba(245, 112, 97, 0.82);
+          background:
+            linear-gradient(90deg, rgba(245, 112, 97, 0.16), transparent 58%),
+            rgba(12, 41, 65, 0.9);
+          box-shadow: inset 0 0 0 1px rgba(247, 201, 91, 0.18);
+        }
+
+        .leaderboard-rank {
+          color: var(--gold);
+          font-size: clamp(0.92rem, 1.3vw, 1.15rem);
+          font-weight: 800;
+          text-align: center;
+        }
+
+        .leaderboard-row-current .leaderboard-rank {
+          color: var(--coral);
+        }
+
+        .leaderboard-image-frame {
+          position: relative;
+          width: 100%;
+          aspect-ratio: 16 / 9;
+          overflow: hidden;
+          border: 1px solid rgba(245, 247, 239, 0.42);
+          border-radius: 0.5rem;
+          background: var(--navy-950);
+        }
+
+        .leaderboard-image {
+          display: block;
+          width: 100%;
+          height: 100%;
+          object-fit: cover;
+        }
+
+        .leaderboard-image-badge {
+          position: absolute;
+          right: 0.2rem;
+          bottom: 0.2rem;
+          border-radius: 999px;
+          padding: 0.1rem 0.28rem;
+          background: rgba(7, 26, 45, 0.82);
+          color: var(--paper);
+          font-size: clamp(0.42rem, 0.58vw, 0.55rem);
+          line-height: 1.2;
+        }
+
+        .leaderboard-details {
+          display: grid;
+          align-content: center;
+          min-width: 0;
+          gap: 0.1rem;
+        }
+
+        .leaderboard-name {
+          color: var(--paper);
+          font-size: clamp(0.78rem, 1.1vw, 1rem);
+          font-weight: 800;
+        }
+
+        .leaderboard-prompt {
+          margin: 0;
+          overflow-wrap: anywhere;
+          color: var(--muted);
+          font-size: clamp(0.57rem, 0.78vw, 0.7rem);
+          line-height: 1.28;
+        }
+
+        .leaderboard-score {
+          display: grid;
+          justify-items: end;
+          gap: 0.05rem;
+          color: var(--muted);
+        }
+
+        .leaderboard-score strong {
+          color: var(--teal);
+          font-size: clamp(1.35rem, 2.1vw, 1.95rem);
+          line-height: 1;
+        }
+
+        .leaderboard-row-current .leaderboard-score strong {
+          color: var(--gold);
+        }
+
+        .leaderboard-score span {
+          font-size: clamp(0.58rem, 0.75vw, 0.68rem);
+        }
+
+        .leaderboard-bottom-action {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          width: min(100%, 64rem);
+          min-height: 4.35rem;
+          justify-self: center;
+          gap: 1rem;
+          border-top: 1px solid rgba(157, 181, 189, 0.28);
+          border-radius: 1.25rem 1.25rem 0 0;
+          padding: 0.62rem 1rem 0;
+          background: rgba(7, 26, 45, 0.36);
+        }
+
+        .leaderboard-bottom-action p {
+          margin: 0;
+          color: var(--muted);
+          font-size: clamp(0.66rem, 0.92vw, 0.82rem);
+        }
+
+        .leaderboard-countdown {
+          color: var(--gold);
+          font-size: 1.35em;
+          font-weight: 800;
+        }
+
+        .leaderboard-ready-link {
+          display: inline-flex;
+          min-height: 2.8rem;
+          align-items: center;
+          gap: 0.4rem;
+          border: 1px solid rgba(157, 181, 189, 0.42);
+          border-radius: 999px;
+          padding: 0.58rem 1rem;
+          color: var(--paper);
+          font-size: clamp(0.72rem, 0.95vw, 0.85rem);
+          font-weight: 700;
+        }
+
+        .leaderboard-ready-link:hover {
+          border-color: var(--teal);
+          color: var(--teal);
+        }
+
+        .leaderboard-ready-link:focus-visible {
+          outline: 3px solid var(--gold);
+          outline-offset: 4px;
+        }
+
         @media (max-width: 900px) {
           .ready-layout,
           .level-layout {

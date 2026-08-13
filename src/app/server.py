@@ -14,6 +14,7 @@ from .domain.models import LevelGroup, PromptSubmissionReason
 from .web import (
     render_challenge_reveal,
     render_generating,
+    render_leaderboard,
     render_level_selection,
     render_prompt_entry,
     render_ready,
@@ -36,7 +37,33 @@ DEMO_FEEDBACK = (
     ("strength", "เลือกสีและบรรยากาศได้ตรงโจทย์"),
     ("improvement", "ลองเพิ่มรายละเอียดตำแหน่งของสิ่งต่าง ๆ"),
 )
-LEADERBOARD_SEAM_MESSAGE = "Leaderboard scene is not implemented in this temporary seam"
+DEMO_LEADERBOARD_LEVEL = LevelGroup.P1_P3
+DEMO_CURRENT_RANK = 2
+# Fixed rows keep this visible checkpoint deterministic; no ranking is computed here.
+DEMO_LEADERBOARD_ROWS = (
+    {
+        "rank": 1,
+        "name": "น้องมะลิ",
+        "score": 96,
+        "prompt": "กระต่ายเชฟยืนทำอาหารในครัวสีสดใส",
+        "is_current": False,
+    },
+    {"rank": 2, "name": "รอบนี้", "score": DEMO_SCORE, "prompt": "", "is_current": True},
+    {
+        "rank": 2,
+        "name": "น้องต้นกล้า",
+        "score": 82,
+        "prompt": "แพนเค้กยักษ์ลอยอยู่เหนือโต๊ะอาหาร",
+        "is_current": False,
+    },
+    {
+        "rank": 4,
+        "name": "น้องพริม",
+        "score": 74,
+        "prompt": "ห้องครัวมีแสงอุ่นและดาวประกายรอบ ๆ",
+        "is_current": False,
+    },
+)
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -247,21 +274,70 @@ async def result_scene(
     )
 
 
-@app.post("/rounds/{round_id}/result/leaderboard")
+@app.post("/rounds/{round_id}/result/leaderboard", status_code=303)
 async def continue_demo_leaderboard(
     round_id: str,
     challenge_id: str = Form(...),
     prompt: str = Form(...),
     score: int = Form(...),
-):
-    """Validate the fixed demo result before the unimplemented Leaderboard seam."""
+    level: str = Form(default=DEMO_LEADERBOARD_LEVEL.value),
+) -> RedirectResponse:
+    """Validate the fixed demo result before the temporary Leaderboard scene."""
 
     _require_demo_round(round_id)
-    _get_challenge(challenge_id)
+    challenge = _get_challenge(challenge_id)
+    _validate_leaderboard_context(challenge, prompt, score, level)
+    return RedirectResponse(
+        url=_leaderboard_url(round_id, challenge_id, prompt, score, level),
+        status_code=303,
+    )
+
+
+@app.get("/rounds/{round_id}/leaderboard", response_class=HTMLResponse)
+async def leaderboard_scene(
+    request: Request,
+    round_id: str,
+    challenge_id: str,
+    prompt: str,
+    score: int,
+    level: str,
+):
+    """Render the deterministic current-level leaderboard checkpoint."""
+
+    _require_demo_round(round_id)
+    challenge = _get_challenge(challenge_id)
+    selected_level = _validate_leaderboard_context(challenge, prompt, score, level)
+    rows = tuple(
+        {
+            **entry,
+            "prompt": prompt if entry["is_current"] else entry["prompt"],
+            "image_url": challenge.target_asset_url,
+        }
+        for entry in DEMO_LEADERBOARD_ROWS
+    )
+    return render_leaderboard(
+        request,
+        round_id,
+        challenge,
+        prompt,
+        score=score,
+        level=selected_level.value,
+        current_rank=DEMO_CURRENT_RANK,
+        rows=rows,
+    )
+
+
+def _validate_leaderboard_context(challenge, prompt: str, score: int, level: str) -> LevelGroup:
     _validate_prompt(prompt)
     if score != DEMO_SCORE:
         raise HTTPException(status_code=422, detail="Score does not match the demo result")
-    raise HTTPException(status_code=501, detail=LEADERBOARD_SEAM_MESSAGE)
+    try:
+        selected_level = LevelGroup(level)
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail="Unknown leaderboard level") from error
+    if selected_level != DEMO_LEADERBOARD_LEVEL or challenge.level != selected_level:
+        raise HTTPException(status_code=422, detail="Leaderboard context does not match the demo")
+    return selected_level
 
 
 def _validate_prompt(prompt: str) -> None:
@@ -283,6 +359,26 @@ def _result_url(round_id: str, challenge_id: str, prompt: str) -> str:
 
     query = urlencode({"challenge_id": challenge_id, "prompt": prompt})
     return f"/rounds/{round_id}/result?{query}"
+
+
+def _leaderboard_url(
+    round_id: str,
+    challenge_id: str,
+    prompt: str,
+    score: int,
+    level: str,
+) -> str:
+    """Build the URL-encoded handoff into the temporary Leaderboard scene."""
+
+    query = urlencode(
+        {
+            "challenge_id": challenge_id,
+            "prompt": prompt,
+            "score": score,
+            "level": level,
+        }
+    )
+    return f"/rounds/{round_id}/leaderboard?{query}"
 
 
 def _require_demo_round(round_id: str) -> None:
