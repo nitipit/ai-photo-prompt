@@ -324,6 +324,23 @@ def test_reconcile_removes_private_and_only_unreferenced_public_tokens(
     assert nested_link.is_symlink()
 
 
+def test_reconcile_preserves_noncanonical_private_quarantine_residue(tmp_path: Path) -> None:
+    store, current, _ = prepared_store(tmp_path)
+    quarantine = store.workspace_for(current) / (
+        f"{artifact_module._QUARANTINE_PREFIX}{uuid4().hex}"
+    )
+    quarantine.write_bytes(b"preserve mismatched capture")
+
+    first = store.reconcile([])
+    second = store.reconcile([])
+
+    assert first.removed_private_workspaces == 0
+    assert second.removed_private_workspaces == 0
+    assert first.skipped_unsafe_entries >= 1
+    assert second.skipped_unsafe_entries >= 1
+    assert quarantine.read_bytes() == b"preserve mismatched capture"
+
+
 @pytest.mark.parametrize("replacement", ["workspace", "round-ancestor"])
 def test_reconcile_revalidates_planned_paths_before_deletion(
     tmp_path: Path,
@@ -508,6 +525,198 @@ def test_reconcile_postcheck_round_swap_cannot_redirect_unlink(
         assert result.removed_public_artifacts == 1
         assert sentinel.read_bytes() == b"outside sentinel"
         assert not (moved_round / published.final_path.name).exists()
+
+
+def test_reconcile_atomic_quarantine_preserves_postmatch_public_substitution(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    for index in range(20):
+        iteration = tmp_path / str(index)
+        store, current, destination = prepared_store(iteration)
+        destination.write_bytes(png())
+        published = store.publish(current, PROVIDER_OUTPUT_PATH)
+        store.cleanup_workspace(current)
+        planned_identity = artifact_module._entry_identity(
+            os.stat(published.final_path, follow_symlinks=False)
+        )
+        replacement_source = iteration / "replacement-sentinel"
+        replacement_source.write_bytes(b"replacement sentinel")
+        replacement_identity = artifact_module._entry_identity(
+            os.stat(replacement_source, follow_symlinks=False)
+        )
+        moved_round = iteration / "moved-round"
+        original_rename = artifact_module._rename_noreplace
+        planned_survivor_name = "planned-survivor.png"
+        restore_conflict = index % 2 == 1
+        swapped = False
+
+        def substitute_at_atomic_capture(
+            parent_fd: int,
+            source: str,
+            destination_name: str,
+            *,
+            artifact_name: str = published.final_path.name,
+            moved: Path = moved_round,
+            replacement: Path = replacement_source,
+            survivor_name: str = planned_survivor_name,
+            rename_noreplace=original_rename,
+            conflict: bool = restore_conflict,
+        ) -> None:
+            nonlocal swapped
+            if source == artifact_name and not swapped:
+                pinned_round = Path(os.readlink(f"/proc/self/fd/{parent_fd}"))
+                pinned_round.rename(moved)
+                os.rename(
+                    source,
+                    survivor_name,
+                    src_dir_fd=parent_fd,
+                    dst_dir_fd=parent_fd,
+                )
+                os.rename(replacement, source, dst_dir_fd=parent_fd)
+                swapped = True
+                rename_noreplace(parent_fd, source, destination_name)
+                if conflict:
+                    descriptor = os.open(
+                        source,
+                        os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                        0o600,
+                        dir_fd=parent_fd,
+                    )
+                    try:
+                        os.write(descriptor, b"canonical blocker")
+                    finally:
+                        os.close(descriptor)
+                return
+            rename_noreplace(parent_fd, source, destination_name)
+
+        with monkeypatch.context() as patch:
+            patch.setattr(
+                artifact_module,
+                "_rename_noreplace",
+                substitute_at_atomic_capture,
+            )
+            result = store.reconcile([])
+
+        assert swapped is True
+        assert result.removed_public_artifacts == 0
+        assert result.skipped_unsafe_entries >= 1
+        assert (
+            artifact_module._entry_identity(
+                os.stat(moved_round / planned_survivor_name, follow_symlinks=False)
+            )
+            == planned_identity
+        )
+        quarantined = [
+            entry
+            for entry in moved_round.iterdir()
+            if entry.name.startswith(artifact_module._QUARANTINE_PREFIX)
+        ]
+        if restore_conflict:
+            assert (moved_round / published.final_path.name).read_bytes() == b"canonical blocker"
+            assert len(quarantined) == 1
+            assert (
+                artifact_module._entry_identity(os.stat(quarantined[0], follow_symlinks=False))
+                == replacement_identity
+            )
+        else:
+            assert not quarantined
+            restored = moved_round / published.final_path.name
+            assert (
+                artifact_module._entry_identity(os.stat(restored, follow_symlinks=False))
+                == replacement_identity
+            )
+            assert restored.read_bytes() == b"replacement sentinel"
+
+
+@pytest.mark.parametrize("substitution", ["leaf", "empty-directory", "workspace"])
+def test_reconcile_atomic_quarantine_preserves_postmatch_private_substitution(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    substitution: str,
+) -> None:
+    for index in range(20):
+        iteration = tmp_path / substitution / str(index)
+        store, current, destination = prepared_store(iteration)
+        workspace = store.workspace_for(current)
+        if substitution == "leaf":
+            destination.write_bytes(b"planned leaf")
+            planned = destination
+        elif substitution == "empty-directory":
+            planned = workspace / "planned-empty-directory"
+            planned.mkdir()
+        else:
+            destination.write_bytes(b"planned workspace leaf")
+            planned = workspace
+        planned_identity = artifact_module._entry_identity(os.stat(planned, follow_symlinks=False))
+
+        replacement_source = iteration / "replacement-sentinel"
+        if substitution == "leaf":
+            replacement_source.write_bytes(b"replacement sentinel")
+        else:
+            replacement_source.mkdir()
+        replacement_identity = artifact_module._entry_identity(
+            os.stat(replacement_source, follow_symlinks=False)
+        )
+        moved_container = iteration / "moved-pinned-directory"
+        original_rename = artifact_module._rename_noreplace
+        planned_survivor_name = "planned-survivor"
+        swapped = False
+        restored_parent: Path | None = None
+
+        def substitute_at_atomic_capture(
+            parent_fd: int,
+            source: str,
+            destination_name: str,
+            *,
+            target_name: str = planned.name,
+            replacement: Path = replacement_source,
+            moved: Path = moved_container,
+            survivor_name: str = planned_survivor_name,
+            rename_noreplace=original_rename,
+        ) -> None:
+            nonlocal restored_parent, swapped
+            if source == target_name and not swapped:
+                pinned_parent = Path(os.readlink(f"/proc/self/fd/{parent_fd}"))
+                pinned_container = pinned_parent.parent if substitution == "leaf" else pinned_parent
+                pinned_container.rename(moved)
+                restored_parent = moved / "output" if substitution == "leaf" else moved
+                os.rename(
+                    source,
+                    survivor_name,
+                    src_dir_fd=parent_fd,
+                    dst_dir_fd=parent_fd,
+                )
+                os.rename(replacement, source, dst_dir_fd=parent_fd)
+                swapped = True
+            rename_noreplace(parent_fd, source, destination_name)
+
+        with monkeypatch.context() as patch:
+            patch.setattr(
+                artifact_module,
+                "_rename_noreplace",
+                substitute_at_atomic_capture,
+            )
+            result = store.reconcile([])
+
+        assert swapped is True
+        assert restored_parent is not None
+        assert result.removed_private_workspaces == 0
+        assert result.skipped_unsafe_entries >= 1
+        planned_survivor = restored_parent / planned_survivor_name
+        replacement_survivor = restored_parent / planned.name
+        assert (
+            artifact_module._entry_identity(os.stat(planned_survivor, follow_symlinks=False))
+            == planned_identity
+        )
+        assert (
+            artifact_module._entry_identity(os.stat(replacement_survivor, follow_symlinks=False))
+            == replacement_identity
+        )
+        assert not any(
+            entry.name.startswith(artifact_module._QUARANTINE_PREFIX)
+            for entry in moved_container.rglob("*")
+        )
 
 
 @pytest.mark.parametrize("replacement", ["workspace", "round-ancestor"])

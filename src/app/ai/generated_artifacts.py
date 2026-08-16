@@ -7,6 +7,7 @@ and browser URL from the server-owned attempt identity.
 
 from __future__ import annotations
 
+import ctypes
 import errno
 import os
 import threading
@@ -30,6 +31,20 @@ _DEFAULT_MAX_WIDTH = 4096
 _DEFAULT_MAX_HEIGHT = 4096
 _DEFAULT_RECONCILIATION_ENTRIES = 10_000
 _INFLATE_CHUNK_BYTES = 64 * 1024
+_QUARANTINE_PREFIX = ".reconcile-quarantine-"
+_QUARANTINE_RENAME_ATTEMPTS = 4
+_RENAME_NOREPLACE = 1
+_LIBC = ctypes.CDLL(None, use_errno=True)
+_RENAMEAT2: Any = getattr(_LIBC, "renameat2", None)
+if _RENAMEAT2 is not None:
+    _RENAMEAT2.argtypes = [
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_uint,
+    ]
+    _RENAMEAT2.restype = ctypes.c_int
 
 
 class ArtifactStoreError(ValueError):
@@ -53,10 +68,10 @@ class ArtifactReconciliation:
     """Bounded startup cleanup counts returned by :meth:`reconcile`.
 
     ``inspected_entries`` counts every directory entry examined below either
-    owned root. Removed counts include only entries that were still safe and
-    removable when cleanup ran. ``retained_public_artifacts`` counts referenced
+    owned root. Removed counts include only planned inodes atomically captured
+    and removed by cleanup. ``retained_public_artifacts`` counts referenced
     canonical public PNGs, while ``skipped_unsafe_entries`` counts malformed,
-    special, or symlink-replaced entries that were not followed.
+    special, or identity-replaced entries that were not followed or deleted.
     """
 
     inspected_entries: int
@@ -316,13 +331,16 @@ class GeneratedArtifactStore:
 
         Every removable canonical private attempt workspace is cleaned. A
         canonical public token PNG is removed only when its exact derived URL is
-        absent from the input. Scanning pins no-follow directory descriptors and
-        removal uses names relative to those descriptors, so pathname ancestor
-        swaps cannot redirect work outside the opened roots. Symlinks and special
-        entries are never followed. The returned counts describe this invocation;
-        callers own obtaining a bounded durable URL snapshot and deciding whether
-        a limit error should fail startup. This primitive performs no database or
-        FastAPI lifecycle work.
+        absent from the input. Scanning pins no-follow directory descriptors.
+        Before destructive work, each planned name is atomically moved through
+        its pinned parent FD to a unique no-replace quarantine name and its
+        captured inode is verified. Substituted entries are safely restored with
+        the same no-replace primitive, or left under one bounded noncanonical
+        quarantine name if the canonical name was concurrently occupied.
+        Symlinks and special entries are never followed. The returned counts
+        describe this invocation; callers own obtaining a bounded durable URL
+        snapshot and deciding whether a limit error should fail startup. This
+        primitive performs no database or FastAPI lifecycle work.
         """
 
         bound = _positive_int(max_entries, "max_entries")
@@ -846,6 +864,9 @@ def _plan_workspace_descendants(
     with os.scandir(directory_fd) as entries:
         for entry in entries:
             scan.inspect()
+            if entry.name.startswith(_QUARANTINE_PREFIX):
+                scan.skip()
+                continue
             state = _entry_state(directory_fd, entry.name)
             if state is None:
                 continue
@@ -1014,49 +1035,42 @@ def _remove_planned_workspace(
         scan.skip()
         return 0
     try:
-        workspace_fd = _open_matching_directory(
-            round_fd,
-            plan.workspace.name,
-            plan.workspace.identity,
-        )
-        if workspace_fd is None:
-            scan.skip()
-            return 0
-        try:
-            assert plan.workspace.children is not None
-            _remove_planned_descendants(workspace_fd, plan.workspace.children, scan)
-        finally:
-            os.close(workspace_fd)
-        removed = _rmdir_planned(round_fd, plan.workspace)
-        if not removed:
+        if not _remove_planned_node(round_fd, plan.workspace, scan):
             scan.skip()
             return 0
     finally:
         os.close(round_fd)
-    _rmdir_planned_name(root_fd, plan.round_name, plan.round_identity)
+    _remove_planned_empty_directory(root_fd, plan.round_name, plan.round_identity)
     return 1
 
 
-def _remove_planned_descendants(
+def _remove_planned_node(
     parent_fd: int,
-    nodes: tuple[_PlannedNode, ...],
+    node: _PlannedNode,
     scan: _ReconciliationScan,
-) -> None:
-    for node in nodes:
-        if node.children is None:
-            if not _unlink_planned(parent_fd, node):
+) -> bool:
+    quarantine_name = _capture_planned_entry(
+        parent_fd,
+        node.name,
+        node.identity,
+        directory=node.children is not None,
+    )
+    if quarantine_name is None:
+        return False
+    if node.children is None:
+        return _unlink_quarantined(parent_fd, quarantine_name, node.name)
+
+    child_fd = _open_matching_directory(parent_fd, quarantine_name, node.identity)
+    if child_fd is None:
+        _restore_quarantined(parent_fd, quarantine_name, node.name)
+        return False
+    try:
+        for child in node.children:
+            if not _remove_planned_node(child_fd, child, scan):
                 scan.skip()
-            continue
-        child_fd = _open_matching_directory(parent_fd, node.name, node.identity)
-        if child_fd is None:
-            scan.skip()
-            continue
-        try:
-            _remove_planned_descendants(child_fd, node.children, scan)
-        finally:
-            os.close(child_fd)
-        if not _rmdir_planned(parent_fd, node):
-            scan.skip()
+    finally:
+        os.close(child_fd)
+    return _rmdir_quarantined(parent_fd, quarantine_name, node.name)
 
 
 def _remove_planned_public_artifact(
@@ -1071,45 +1085,119 @@ def _remove_planned_public_artifact(
         scan.skip()
         return 0
     try:
-        if not _unlink_planned(round_fd, plan.artifact):
+        if not _remove_planned_node(round_fd, plan.artifact, scan):
             scan.skip()
             return 0
     finally:
         os.close(round_fd)
-    _rmdir_planned_name(root_fd, plan.round_name, plan.round_identity)
+    _remove_planned_empty_directory(root_fd, plan.round_name, plan.round_identity)
     return 1
 
 
-def _unlink_planned(parent_fd: int, node: _PlannedNode) -> bool:
-    if not _entry_matches(parent_fd, node.name, node.identity, directory=False):
-        return _entry_state(parent_fd, node.name) is None
-    try:
-        os.unlink(node.name, dir_fd=parent_fd)
-    except FileNotFoundError:
-        return True
-    except OSError:
-        return False
-    return True
-
-
-def _rmdir_planned(parent_fd: int, node: _PlannedNode) -> bool:
-    return _rmdir_planned_name(parent_fd, node.name, node.identity)
-
-
-def _rmdir_planned_name(
+def _capture_planned_entry(
     parent_fd: int,
     name: str,
     identity: tuple[int, int, int],
-) -> bool:
-    if not _entry_matches(parent_fd, name, identity, directory=True):
-        return _entry_state(parent_fd, name) is None
+    *,
+    directory: bool,
+) -> str | None:
+    """Atomically isolate a name, then authorize work from the captured inode."""
+
+    # This is only an eligibility check. The atomic capture and post-capture
+    # identity check below, not this result, authorize destructive work.
+    if not _entry_matches(parent_fd, name, identity, directory=directory):
+        return None
+    for _ in range(_QUARANTINE_RENAME_ATTEMPTS):
+        quarantine_name = f"{_QUARANTINE_PREFIX}{uuid.uuid4().hex}"
+        try:
+            _rename_noreplace(parent_fd, name, quarantine_name)
+        except FileExistsError:
+            continue
+        except FileNotFoundError:
+            return None
+        except OSError:
+            return None
+
+        captured = _entry_state(parent_fd, quarantine_name)
+        type_matches = captured is not None and (
+            S_ISDIR(captured.st_mode) if directory else S_ISREG(captured.st_mode)
+        )
+        if captured is None or _entry_identity(captured) != identity or not type_matches:
+            _restore_quarantined(parent_fd, quarantine_name, name)
+            return None
+        return quarantine_name
+    return None
+
+
+def _rename_noreplace(parent_fd: int, source: str, destination: str) -> None:
+    """Rename one sibling without ever replacing an existing destination."""
+
+    if _RENAMEAT2 is None:
+        raise ArtifactSecurityError("artifact reconciliation requires atomic no-replace rename")
+    result = _RENAMEAT2(
+        parent_fd,
+        os.fsencode(source),
+        parent_fd,
+        os.fsencode(destination),
+        _RENAME_NOREPLACE,
+    )
+    if result == 0:
+        return
+    error_number = ctypes.get_errno()
+    unsupported = {
+        errno.EINVAL,
+        errno.ENOSYS,
+        getattr(errno, "ENOTSUP", errno.EINVAL),
+        getattr(errno, "EOPNOTSUPP", errno.EINVAL),
+    }
+    if error_number in unsupported:
+        raise ArtifactSecurityError(
+            "artifact reconciliation filesystem lacks atomic no-replace rename"
+        )
+    raise OSError(error_number, os.strerror(error_number), source, destination)
+
+
+def _restore_quarantined(parent_fd: int, quarantine_name: str, original_name: str) -> None:
+    """Restore without replacement, otherwise preserve the quarantined entry."""
+
     try:
-        os.rmdir(name, dir_fd=parent_fd)
-    except FileNotFoundError:
-        return True
+        _rename_noreplace(parent_fd, quarantine_name, original_name)
+    except (FileExistsError, FileNotFoundError):
+        pass
     except OSError:
+        pass
+
+
+def _unlink_quarantined(parent_fd: int, quarantine_name: str, original_name: str) -> bool:
+    try:
+        os.unlink(quarantine_name, dir_fd=parent_fd)
+    except FileNotFoundError:
+        return False
+    except OSError:
+        _restore_quarantined(parent_fd, quarantine_name, original_name)
         return False
     return True
+
+
+def _rmdir_quarantined(parent_fd: int, quarantine_name: str, original_name: str) -> bool:
+    try:
+        os.rmdir(quarantine_name, dir_fd=parent_fd)
+    except FileNotFoundError:
+        return False
+    except OSError:
+        _restore_quarantined(parent_fd, quarantine_name, original_name)
+        return False
+    return True
+
+
+def _remove_planned_empty_directory(
+    parent_fd: int,
+    name: str,
+    identity: tuple[int, int, int],
+) -> None:
+    quarantine_name = _capture_planned_entry(parent_fd, name, identity, directory=True)
+    if quarantine_name is not None:
+        _rmdir_quarantined(parent_fd, quarantine_name, name)
 
 
 def _close_descriptor(descriptor: int | None) -> None:
