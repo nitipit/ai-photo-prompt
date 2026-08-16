@@ -70,6 +70,7 @@ _FAILURES: dict[str, tuple[str, str]] = {
     "target": ("invalid_target_asset", "ภาพโจทย์ไม่พร้อมใช้งาน"),
     "provider_json": ("invalid_provider_json", "ผลการประเมินจาก AI ไม่ถูกต้อง"),
     "input": ("invalid_pipeline_input", "ข้อมูลการสร้างภาพไม่ถูกต้อง"),
+    "busy": ("pi_busy", "AI กำลังประมวลผลรอบอื่นอยู่ กรุณาลองอีกครั้ง"),
 }
 
 
@@ -102,6 +103,7 @@ class PiAIPipeline:
         self._max_stdout_bytes = self._validate_bound(max_stdout_bytes, "max_stdout_bytes")
         self._max_stderr_bytes = self._validate_bound(max_stderr_bytes, "max_stderr_bytes")
         self._rpc_cwd = Path(rpc_cwd)
+        self._admission = asyncio.Semaphore(1)
 
     async def run(
         self,
@@ -111,11 +113,22 @@ class PiAIPipeline:
         *,
         attempt: GenerationAttempt,
     ) -> AIPipelineResult:
-        """Return a complete result or a safe retryable failure.
+        """Return one admitted result or a safe retryable busy failure."""
 
-        The deadline is monotonic and shared by preparation, both RPC calls, and
-        evaluation.  A cancellation is deliberately not converted to a result.
-        """
+        if self._admission.locked():
+            return self._failure("busy")
+        async with self._admission:
+            return await self._run_attempt(challenge, prompt, timeout, attempt=attempt)
+
+    async def _run_attempt(
+        self,
+        challenge: ChallengeSpec,
+        prompt: str,
+        timeout: float,
+        *,
+        attempt: GenerationAttempt,
+    ) -> AIPipelineResult:
+        """Run one admitted attempt under a shared monotonic deadline."""
 
         deadline = time.monotonic() + self._validate_timeout(timeout)
         prepared: ArtifactWorkspace | None = None
@@ -124,7 +137,7 @@ class PiAIPipeline:
         try:
             self._validate_inputs(challenge, prompt, attempt)
             cleanup_needed = True
-            prepared = self._prepare_workspace(attempt)
+            prepared = await self._prepare_workspace(attempt)
             self._validate_workspace(prepared)
 
             image_result = await self._call_rpc(
@@ -133,8 +146,8 @@ class PiAIPipeline:
             )
             self._validate_image_completion(image_result, prepared.relative_output_path)
 
-            published = self._publish(attempt, prepared.relative_output_path)
-            generated_bytes = self._read_published(published)
+            published = await self._publish(attempt, prepared.relative_output_path)
+            generated_bytes = await self._read_published(published)
             target_bytes, target_mime = self._read_target(challenge.target_asset_url)
 
             evaluator_result = await self._call_rpc(
@@ -173,7 +186,7 @@ class PiAIPipeline:
             return self._failure("process")
         finally:
             if not succeeded and cleanup_needed:
-                self._discard_safely(attempt)
+                await self._discard_safely(attempt)
 
     def _image_request(
         self,
@@ -422,18 +435,22 @@ class PiAIPipeline:
             raise _PipelineFailure("target")
         return candidate
 
-    def _prepare_workspace(self, attempt: GenerationAttempt) -> ArtifactWorkspace:
+    async def _prepare_workspace(self, attempt: GenerationAttempt) -> ArtifactWorkspace:
         try:
-            workspace = self._artifact_store.prepare_workspace(attempt)
+            workspace = await self._run_filesystem_unit(
+                self._artifact_store.prepare_workspace, attempt
+            )
         except Exception:
             raise _PipelineFailure("artifact") from None
         if not isinstance(workspace, ArtifactWorkspace):
             raise _PipelineFailure("artifact")
         return workspace
 
-    def _publish(self, attempt: GenerationAttempt, provider_path: str) -> PublishedArtifact:
+    async def _publish(self, attempt: GenerationAttempt, provider_path: str) -> PublishedArtifact:
         try:
-            published = self._artifact_store.publish(attempt, provider_path)
+            published = await self._run_filesystem_unit(
+                self._artifact_store.publish, attempt, provider_path
+            )
         except Exception:
             raise _PipelineFailure("artifact") from None
         if (
@@ -445,20 +462,42 @@ class PiAIPipeline:
             raise _PipelineFailure("artifact")
         return published
 
-    def _read_published(self, published: PublishedArtifact) -> bytes:
+    async def _read_published(self, published: PublishedArtifact) -> bytes:
         try:
-            data = self._artifact_store.read(published)
+            data = await self._run_filesystem_unit(self._artifact_store.read, published)
         except Exception:
             raise _PipelineFailure("artifact") from None
         if type(data) is not bytes or not data:
             raise _PipelineFailure("artifact")
         return data
 
-    def _discard_safely(self, attempt: GenerationAttempt) -> None:
+    async def _discard_safely(self, attempt: GenerationAttempt) -> None:
         try:
-            self._artifact_store.discard(attempt)
+            await self._run_filesystem_unit(self._artifact_store.discard, attempt)
         except Exception:
             pass
+
+    @staticmethod
+    async def _run_filesystem_unit(operation: Callable[..., Any], *args: Any) -> Any:
+        """Settle one complete filesystem unit even through repeated cancellation."""
+
+        task = asyncio.create_task(asyncio.to_thread(operation, *args))
+        cancellation: asyncio.CancelledError | None = None
+        while not task.done():
+            try:
+                await asyncio.shield(task)
+            except asyncio.CancelledError as error:
+                cancellation = error
+                continue
+        try:
+            result = task.result()
+        except Exception as error:
+            if cancellation is not None:
+                raise cancellation from error
+            raise
+        if cancellation is not None:
+            raise cancellation
+        return result
 
     @staticmethod
     def _request_timeout(deadline: float) -> float:

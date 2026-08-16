@@ -11,7 +11,7 @@
   },
   "tasks": {
     "app:build": "uv run src/build/challenges.py --output dist && deno run -A src/build/app.ts",
-    "app:serve": "uv run uvicorn app.server:app --app-dir src --reload",
+    "app:serve": "PHOTO_PROMPT_AI_PROVIDER=pi uv run uvicorn app.server:app --app-dir src --reload",
     "dev": "deno task app:build && deno task app:serve",
     "check": "deno check src/build/app.ts src/app/templates/**/*.ts",
     "fmt": "deno fmt src/build src/app/templates",

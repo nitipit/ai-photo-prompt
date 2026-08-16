@@ -7,8 +7,16 @@ from .fake import (
     FakeImageMatcher,
     FakePromptEvaluator,
 )
+from .generated_artifacts import GeneratedArtifactStore
+from .pi_pipeline import PiAIPipeline
 from .pipeline import FakeAIPipeline
-from .protocols import FeedbackComposer, ImageGenerator, ImageMatcher, PromptEvaluator
+from .protocols import (
+    FeedbackComposer,
+    GenerationAttempt,
+    ImageGenerator,
+    ImageMatcher,
+    PromptEvaluator,
+)
 from .results import AIPipelineResult
 
 __all__ = [
@@ -19,8 +27,11 @@ __all__ = [
     "FakeImageGenerator",
     "FakeImageMatcher",
     "FakePromptEvaluator",
+    "GeneratedArtifactStore",
+    "GenerationAttempt",
     "FeedbackComposer",
     "ImageGenerator",
     "ImageMatcher",
+    "PiAIPipeline",
     "PromptEvaluator",
 ]

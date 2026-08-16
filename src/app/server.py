@@ -1,9 +1,11 @@
 """FastAPI entry point for the first visible Photo Prompt checkpoint."""
 
+import os
 import random
+import shutil
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from uuid import uuid4
 
@@ -13,7 +15,25 @@ from fastapi.staticfiles import StaticFiles
 from shelfdb.shelf import DB  # type: ignore[import-untyped]
 
 from .ai import FakeAIPipeline
-from .config import DEFAULT_CATALOG_PATH, DEFAULT_DB_PATH, DIST_DIR
+from .ai.generated_artifacts import GeneratedArtifactStore
+from .ai.pi_pipeline import PiAIPipeline
+from .config import (
+    AI_PROVIDER_ENV,
+    DEFAULT_AI_PROVIDER,
+    DEFAULT_CATALOG_PATH,
+    DEFAULT_DB_PATH,
+    DEFAULT_GENERATED_ROOT,
+    DEFAULT_PI_BRIDGE_PATH,
+    DEFAULT_PI_EVALUATOR_THINKING,
+    DEFAULT_PI_EXECUTABLE,
+    DEFAULT_PI_IMAGE_THINKING,
+    DEFAULT_PI_MAX_OUTPUT_BYTES,
+    DEFAULT_PI_MODEL,
+    DEFAULT_PI_PROVIDER,
+    DEFAULT_PI_TIMEOUT_SECONDS,
+    DEFAULT_PI_WORKSPACE_ROOT,
+    DIST_DIR,
+)
 from .content.repository import ChallengeCatalog
 from .domain.models import (
     ChallengeSpec,
@@ -54,6 +74,7 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
 
     catalog_path = Path(getattr(application.state, "catalog_path", DEFAULT_CATALOG_PATH))
     db_path = Path(getattr(application.state, "db_path", DEFAULT_DB_PATH))
+    pipeline, artifact_store, provider_timeout = _build_ai_pipeline(application)
     db: DB | None = None
     try:
         source_catalog = ChallengeCatalog.load(catalog_path)
@@ -71,14 +92,25 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
             _select_challenge,
             _utc_now,
             generation_claims=generation_claims,
-            pipeline=FakeAIPipeline(),
+            pipeline=pipeline,
             owner_instance=str(uuid4()),
+            claim_lease_duration=timedelta(
+                seconds=float(getattr(application.state, "claim_lease_seconds", 30.0))
+            ),
+            claim_heartbeat_interval=timedelta(
+                seconds=float(getattr(application.state, "claim_heartbeat_seconds", 5.0))
+            ),
+            provider_timeout=provider_timeout,
         )
         application.state.db = db
         application.state.catalog = runtime_catalog
         application.state.challenge_repository = challenge_repository
         application.state.round_repository = round_repository
         application.state.generation_claims = generation_claims
+        application.state.artifact_store = artifact_store
+        application.state.active_ai_provider = (
+            "pi" if isinstance(pipeline, PiAIPipeline) else "fake"
+        )
         application.state.game_round_service = game_round_service
         yield
     finally:
@@ -92,10 +124,113 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
                 "challenge_repository",
                 "round_repository",
                 "generation_claims",
+                "artifact_store",
+                "active_ai_provider",
                 "game_round_service",
             ):
                 if hasattr(application.state, name):
                     delattr(application.state, name)
+
+
+def _build_ai_pipeline(
+    application: FastAPI,
+) -> tuple[FakeAIPipeline | PiAIPipeline, GeneratedArtifactStore | None, float]:
+    """Build the explicitly selected provider without silent fallback."""
+
+    selected = str(
+        getattr(
+            application.state,
+            "ai_provider",
+            os.environ.get(AI_PROVIDER_ENV, DEFAULT_AI_PROVIDER),
+        )
+    ).strip()
+    if selected == "fake":
+        return FakeAIPipeline(), None, 10.0
+    if selected != "pi":
+        raise RuntimeError(f"unsupported AI provider: {selected!r}")
+
+    executable = str(getattr(application.state, "pi_executable", DEFAULT_PI_EXECUTABLE))
+    resolved_executable = shutil.which(executable)
+    if resolved_executable is None:
+        raise RuntimeError("Pi AI provider is configured but the pi executable is unavailable")
+    bridge_path = Path(getattr(application.state, "pi_bridge_path", DEFAULT_PI_BRIDGE_PATH))
+    if not bridge_path.is_file():
+        raise RuntimeError("Pi AI provider is configured but the Codex bridge is unavailable")
+
+    workspace_root = Path(
+        getattr(application.state, "pi_workspace_root", DEFAULT_PI_WORKSPACE_ROOT)
+    )
+    generated_root = Path(getattr(application.state, "generated_root", DEFAULT_GENERATED_ROOT))
+    workspace_root.mkdir(parents=True, exist_ok=True)
+    generated_root.mkdir(parents=True, exist_ok=True)
+    artifact_store = GeneratedArtifactStore(workspace_root, generated_root)
+    provider = str(getattr(application.state, "pi_provider", DEFAULT_PI_PROVIDER))
+    model = str(getattr(application.state, "pi_model", DEFAULT_PI_MODEL))
+    image_argv = _pi_rpc_argv(
+        resolved_executable,
+        provider,
+        model,
+        str(getattr(application.state, "pi_image_thinking", DEFAULT_PI_IMAGE_THINKING)),
+    ) + (
+        "--extension",
+        str(bridge_path),
+        "--no-tools",
+        "--tools",
+        "codex_imagegen",
+    )
+    evaluator_argv = _pi_rpc_argv(
+        resolved_executable,
+        provider,
+        model,
+        str(
+            getattr(
+                application.state,
+                "pi_evaluator_thinking",
+                DEFAULT_PI_EVALUATOR_THINKING,
+            )
+        ),
+    ) + ("--no-tools",)
+    timeout = float(getattr(application.state, "provider_timeout", DEFAULT_PI_TIMEOUT_SECONDS))
+    pipeline = PiAIPipeline(
+        image_argv=image_argv,
+        evaluator_argv=evaluator_argv,
+        target_static_root=Path(getattr(application.state, "dist_root", DIST_DIR)),
+        artifact_store=artifact_store,
+        max_stdout_bytes=int(
+            getattr(application.state, "pi_max_output_bytes", DEFAULT_PI_MAX_OUTPUT_BYTES)
+        ),
+        max_stderr_bytes=int(
+            getattr(application.state, "pi_max_output_bytes", DEFAULT_PI_MAX_OUTPUT_BYTES)
+        ),
+        rpc_cwd=workspace_root,
+    )
+    return pipeline, artifact_store, timeout
+
+
+def _pi_rpc_argv(
+    executable: str,
+    provider: str,
+    model: str,
+    thinking: str,
+) -> tuple[str, ...]:
+    """Return the context-free, ephemeral baseline shared by Pi RPC workers."""
+
+    return (
+        executable,
+        "--mode",
+        "rpc",
+        "--no-session",
+        "--provider",
+        provider,
+        "--model",
+        model,
+        "--thinking",
+        thinking,
+        "--no-context-files",
+        "--no-skills",
+        "--no-prompt-templates",
+        "--no-extensions",
+    )
 
 
 def _select_challenge(candidates: tuple[ChallengeSpec, ...]) -> ChallengeSpec:
@@ -492,5 +627,11 @@ def _get_challenge(request: Request, challenge_id: str):
         raise HTTPException(status_code=422, detail="Stored challenge is invalid") from error
 
 
+# Publish only the controlled generated-artifact root, never the full data tree.
+app.mount(
+    "/generated",
+    StaticFiles(directory=DEFAULT_GENERATED_ROOT, check_dir=False),
+    name="generated-artifacts",
+)
 # Keep SSR routes above this generated-browser fallback.
 app.mount("/", StaticFiles(directory=DIST_DIR, check_dir=False), name="assets")

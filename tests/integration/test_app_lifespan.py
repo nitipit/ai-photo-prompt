@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import asyncio
 import json
+import sys
 from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
 from shelfdb.shelf import DB  # type: ignore[import-untyped]
 
-from app.ai import FakeAIPipeline
+from app.ai import FakeAIPipeline, PiAIPipeline
 from app.content.repository import CatalogValidationError, ChallengeCatalog
 from app.domain.models import LevelGroup
 from app.persistence import (
@@ -26,7 +27,17 @@ def runtime_app(tmp_path: Path, materialized_catalog):
     app.state.db_path = tmp_path / "runtime.shelfdb"
     app.state.catalog_path = materialized_catalog.catalog_path
     yield app
-    for name in ("db_path", "catalog_path"):
+    for name in (
+        "db_path",
+        "catalog_path",
+        "ai_provider",
+        "pi_executable",
+        "pi_bridge_path",
+        "pi_workspace_root",
+        "generated_root",
+        "dist_root",
+        "provider_timeout",
+    ):
         if hasattr(app.state, name):
             delattr(app.state, name)
 
@@ -55,6 +66,44 @@ def test_lifespan_exposes_typed_runtime_state_and_closes_db(runtime_app) -> None
     with pytest.raises(Exception, match="closed"):
         with db.transaction(write=False):
             pass
+
+
+def test_pi_provider_is_explicit_and_never_falls_back_to_fake(
+    runtime_app,
+    tmp_path: Path,
+) -> None:
+    bridge = tmp_path / "codex-bridge.ts"
+    bridge.write_text("// startup presence check", encoding="utf-8")
+    runtime_app.state.ai_provider = "pi"
+    runtime_app.state.pi_executable = sys.executable
+    runtime_app.state.pi_bridge_path = bridge
+    runtime_app.state.pi_workspace_root = tmp_path / "pi-rpc"
+    runtime_app.state.generated_root = tmp_path / "generated"
+    runtime_app.state.dist_root = tmp_path / "dist"
+    runtime_app.state.provider_timeout = 240.0
+
+    with TestClient(runtime_app):
+        service = runtime_app.state.game_round_service
+        assert runtime_app.state.active_ai_provider == "pi"
+        assert isinstance(service._pipeline, PiAIPipeline)
+        assert not isinstance(service._pipeline, FakeAIPipeline)
+        assert runtime_app.state.artifact_store.private_root == tmp_path / "pi-rpc"
+        assert runtime_app.state.artifact_store.published_root == tmp_path / "generated"
+        assert service._provider_timeout == 240.0
+        assert "codex_imagegen" in service._pipeline._image_argv
+        assert "codex_imagegen" not in service._pipeline._evaluator_argv
+
+
+def test_unknown_ai_provider_fails_without_opening_db(runtime_app, tmp_path: Path) -> None:
+    runtime_app.state.ai_provider = "unknown"
+    db_path = runtime_app.state.db_path
+
+    with pytest.raises(RuntimeError, match="unsupported AI provider"):
+        with TestClient(runtime_app):
+            pass
+
+    assert not db_path.exists()
+    assert not hasattr(runtime_app.state, "db")
 
 
 def test_service_round_survives_lifespan_reopen(runtime_app) -> None:

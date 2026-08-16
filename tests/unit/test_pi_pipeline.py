@@ -3,11 +3,15 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import struct
+import zlib
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 import pytest
 
+from app.ai.generated_artifacts import GeneratedArtifactStore
 from app.ai.pi_pipeline import (
     ArtifactWorkspace,
     PiAIPipeline,
@@ -22,6 +26,24 @@ from app.domain.models import (
 )
 
 ATTEMPT = GenerationAttempt(round_id="round-1", attempt_token="attempt-1")
+
+
+def valid_png() -> bytes:
+    def chunk(name: bytes, payload: bytes) -> bytes:
+        return (
+            struct.pack(">I", len(payload))
+            + name
+            + payload
+            + struct.pack(">I", zlib.crc32(name + payload) & 0xFFFFFFFF)
+        )
+
+    ihdr = struct.pack(">II", 1, 1) + b"\x08\x06\x00\x00\x00"
+    return (
+        b"\x89PNG\r\n\x1a\n"
+        + chunk(b"IHDR", ihdr)
+        + chunk(b"IDAT", zlib.compress(b"\x00\x00\x00\x00\x00"))
+        + chunk(b"IEND", b"")
+    )
 
 
 class FakeStore:
@@ -101,6 +123,7 @@ def rpc_result(
     image: bool = False,
     tools: tuple[dict[str, Any], ...] = (),
     confirmation_sent: bool | None = None,
+    output_path: str = "generated.png",
 ) -> PiRPCResult:
     events: list[dict[str, Any]] = [
         {"type": "response", "id": "command", "command": "prompt", "success": True},
@@ -118,7 +141,7 @@ def rpc_result(
                     "toolCallId": "tool-1",
                     "toolName": "codex_imagegen",
                     "isError": False,
-                    "result": {"details": {"status": "completed", "outputPath": "generated.png"}},
+                    "result": {"details": {"status": "completed", "outputPath": output_path}},
                 },
             ]
         )
@@ -212,6 +235,75 @@ async def test_success_uses_two_attachments_and_computes_only_application_score(
     assert "Attachment 1 is the approved target reference" in evaluator_payload["instruction"]
     assert "Attachment 2 is the generated candidate" in evaluator_payload["instruction"]
     assert store.discards == []
+
+
+@pytest.mark.asyncio
+async def test_pipeline_integrates_with_real_atomic_artifact_store(
+    tmp_path: Path, challenge: ChallengeSpec
+) -> None:
+    store = GeneratedArtifactStore(tmp_path / "private", tmp_path / "published")
+    actual_attempt = GenerationAttempt(round_id=str(uuid4()), attempt_token=str(uuid4()))
+
+    async def rpc(request: PiRPCRequest) -> PiRPCResult:
+        if request.argv == ("pi-image",):
+            destination = Path(request.cwd, "output", "generated.png")
+            destination.write_bytes(valid_png())
+            return rpc_result(image=True, output_path="output/generated.png")
+        return rpc_result(assistant_text=evaluation_text())
+
+    pipeline = PiAIPipeline(
+        ["pi-image"],
+        ["pi-evaluator"],
+        tmp_path,
+        store,
+        rpc,
+        max_stdout_bytes=1024,
+        max_stderr_bytes=1024,
+    )
+    result = await pipeline.run(challenge, "มังกรรับบอล", 2, attempt=actual_attempt)
+
+    assert result.status is PipelineResultStatus.SUCCESS
+    assert result.artifact is not None
+    assert result.artifact.url == (
+        f"/generated/{actual_attempt.round_id}/{actual_attempt.attempt_token}.png"
+    )
+    assert store.resolve_public(actual_attempt).read_bytes() == valid_png()
+
+
+@pytest.mark.asyncio
+async def test_second_pipeline_attempt_returns_busy_without_rpc_or_workspace(
+    tmp_path: Path, challenge: ChallengeSpec
+) -> None:
+    started = asyncio.Event()
+    release = asyncio.Event()
+    calls = 0
+
+    async def rpc(request: PiRPCRequest) -> PiRPCResult:
+        nonlocal calls
+        calls += 1
+        if request.argv == ("pi-image",):
+            Path(request.cwd, "generated.png").write_bytes(b"generated-image")
+            started.set()
+            await release.wait()
+            return rpc_result(image=True)
+        return rpc_result(assistant_text=evaluation_text())
+
+    pipeline, _store = make_pipeline(tmp_path, challenge, rpc)
+    first = asyncio.create_task(pipeline.run(challenge, "first", 2, attempt=ATTEMPT))
+    await started.wait()
+    second = await pipeline.run(
+        challenge,
+        "second",
+        2,
+        attempt=GenerationAttempt(round_id="round-2", attempt_token="attempt-2"),
+    )
+    release.set()
+    completed = await first
+
+    assert second.failure is not None
+    assert second.failure.code == "pi_busy"
+    assert completed.status is PipelineResultStatus.SUCCESS
+    assert calls == 2
 
 
 @pytest.mark.asyncio
