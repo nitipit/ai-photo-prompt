@@ -226,8 +226,8 @@ def test_blocking_generation_keeps_scene_and_status_pollable(
             self.release = Event()
             self.calls = 0
 
-        async def run(self, challenge, prompt: str, timeout: float):
-            del prompt, timeout
+        async def run(self, challenge, prompt: str, timeout: float, *, attempt=None):
+            del prompt, timeout, attempt
             self.calls += 1
             self.started.set()
             await asyncio.to_thread(self.release.wait)
@@ -270,8 +270,8 @@ def test_already_running_generation_is_a_stable_conflict(runtime_app) -> None:
             self.started = Event()
             self.release = Event()
 
-        async def run(self, challenge, prompt: str, timeout: float):
-            del prompt, timeout
+        async def run(self, challenge, prompt: str, timeout: float, *, attempt=None):
+            del prompt, timeout, attempt
             self.started.set()
             await asyncio.to_thread(self.release.wait)
             return await FakeAIPipeline().run(challenge, "prompt", 1.0)

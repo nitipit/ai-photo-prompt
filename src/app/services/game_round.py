@@ -19,6 +19,7 @@ from uuid import uuid4
 
 from statemachine.exceptions import TransitionNotAllowed
 
+from app.ai.protocols import GenerationAttempt
 from app.ai.results import AIPipelineResult
 from app.content.repository import ChallengeSource
 from app.domain.models import (
@@ -87,6 +88,8 @@ class AIPipelineRunner(Protocol):
         challenge: ChallengeSpec,
         prompt: str,
         timeout: float,
+        *,
+        attempt: GenerationAttempt,
     ) -> AIPipelineResult: ...
 
 
@@ -527,7 +530,9 @@ class GameRoundService:
     ) -> AIPipelineResult:
         """Supervise provider work while fencing its claim with a heartbeat."""
 
-        provider_task = asyncio.create_task(self._run_provider(pipeline, challenge, prompt))
+        provider_task = asyncio.create_task(
+            self._run_provider(pipeline, challenge, prompt, round_id, claim)
+        )
         heartbeat_task = asyncio.create_task(self._renew_claim_loop(claims, round_id, claim))
         try:
             done, _pending = await asyncio.wait(
@@ -571,12 +576,22 @@ class GameRoundService:
         pipeline: AIPipelineRunner,
         challenge: ChallengeSpec,
         prompt: str,
+        round_id: str,
+        claim: AttemptClaim,
     ) -> AIPipelineResult:
         """Return a bounded provider outcome without handling claim ownership."""
 
         try:
             return await asyncio.wait_for(
-                pipeline.run(challenge, prompt, timeout=self._provider_timeout),
+                pipeline.run(
+                    challenge,
+                    prompt,
+                    timeout=self._provider_timeout,
+                    attempt=GenerationAttempt(
+                        round_id=round_id,
+                        attempt_token=claim.attempt_token,
+                    ),
+                ),
                 timeout=self._provider_timeout,
             )
         except asyncio.CancelledError:

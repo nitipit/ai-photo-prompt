@@ -105,7 +105,9 @@ class RetryPipeline:
     def __init__(self) -> None:
         self.calls = 0
 
-    async def run(self, challenge: ChallengeSpec, prompt: str, timeout: float) -> AIPipelineResult:
+    async def run(
+        self, challenge: ChallengeSpec, prompt: str, timeout: float, *, attempt=None
+    ) -> AIPipelineResult:
         self.calls += 1
         assert prompt == "เด็กวาดภาพในสวน"
         assert timeout == 10.0
@@ -118,8 +120,10 @@ class RaisingPipeline:
     def __init__(self) -> None:
         self.calls = 0
 
-    async def run(self, challenge: ChallengeSpec, prompt: str, timeout: float) -> AIPipelineResult:
-        del challenge, prompt, timeout
+    async def run(
+        self, challenge: ChallengeSpec, prompt: str, timeout: float, *, attempt=None
+    ) -> AIPipelineResult:
+        del challenge, prompt, timeout, attempt
         self.calls += 1
         raise RuntimeError("provider secret should not be persisted")
 
@@ -129,8 +133,10 @@ class StaticPipeline:
         self.calls = 0
         self.result = result
 
-    async def run(self, challenge: ChallengeSpec, prompt: str, timeout: float) -> object:
-        del challenge, prompt, timeout
+    async def run(
+        self, challenge: ChallengeSpec, prompt: str, timeout: float, *, attempt=None
+    ) -> object:
+        del challenge, prompt, timeout, attempt
         self.calls += 1
         return self.result
 
@@ -147,10 +153,13 @@ class BlockingPipeline:
         self.started = asyncio.Event()
         self.release = asyncio.Event()
 
-    async def run(self, challenge: ChallengeSpec, prompt: str, timeout: float) -> AIPipelineResult:
+    async def run(
+        self, challenge: ChallengeSpec, prompt: str, timeout: float, *, attempt=None
+    ) -> AIPipelineResult:
         self.calls += 1
         assert prompt == "เด็กวาดภาพในสวน"
         assert timeout == self.expected_timeout
+        assert attempt is not None
         self.started.set()
         await self.release.wait()
         return self.result if self.result is not None else success_result(challenge)
@@ -253,7 +262,9 @@ class CancellablePipeline(BlockingPipeline):
         super().__init__(expected_timeout=expected_timeout)
         self.cancelled = Event()
 
-    async def run(self, challenge: ChallengeSpec, prompt: str, timeout: float) -> AIPipelineResult:
+    async def run(
+        self, challenge: ChallengeSpec, prompt: str, timeout: float, *, attempt=None
+    ) -> AIPipelineResult:
         self.calls += 1
         assert prompt == "เด็กวาดภาพในสวน"
         assert timeout == self.expected_timeout

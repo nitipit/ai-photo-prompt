@@ -19,6 +19,7 @@ from .fake import (
     FakeImageMatcher,
     FakePromptEvaluator,
 )
+from .protocols import GenerationAttempt
 from .results import AIPipelineResult
 
 
@@ -33,10 +34,16 @@ class FakeAIPipeline:
         self._feedback_composer = FakeFeedbackComposer()
 
     async def run(
-        self, challenge: ChallengeSpec, prompt: str, timeout: float = 1.0
+        self,
+        challenge: ChallengeSpec,
+        prompt: str,
+        timeout: float = 1.0,
+        *,
+        attempt: GenerationAttempt | None = None,
     ) -> AIPipelineResult:
         """Return a complete success or a bounded failure with no partial result."""
 
+        del attempt
         if self._fail:
             return AIPipelineResult(
                 status=PipelineResultStatus.ERROR,

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Protocol
 
 from app.domain.models import (
@@ -15,6 +16,14 @@ from app.domain.models import (
 )
 
 ProviderResult = ProviderSuccess | ProviderError
+
+
+@dataclass(frozen=True, slots=True)
+class GenerationAttempt:
+    """Server-owned identity used for private workspace and artifact fencing."""
+
+    round_id: str
+    attempt_token: str
 
 
 class ImageGenerator(Protocol):
@@ -56,6 +65,7 @@ class FeedbackComposer(Protocol):
 
 __all__ = [
     "FeedbackComposer",
+    "GenerationAttempt",
     "ImageGenerator",
     "ImageMatcher",
     "PromptEvaluator",
