@@ -144,6 +144,8 @@ class GameRoundService:
         self._claim_lease_duration = claim_lease_duration
         self._claim_heartbeat_interval = claim_heartbeat_interval
         self._provider_timeout = provider_timeout
+        self._generation_admission_open = True
+        self._active_generation_tasks: set[asyncio.Task[object]] = set()
         self._validate_generation_timing(
             claim_lease_duration,
             claim_heartbeat_interval,
@@ -275,6 +277,46 @@ class GameRoundService:
         return replacement
 
     async def generate_round(self, round_id: str) -> RoundRecord:
+        """Run one admitted attempt tracked through shutdown settlement."""
+
+        task = self._admit_generation()
+        try:
+            return await self._generate_round(round_id)
+        finally:
+            self._active_generation_tasks.discard(task)
+
+    async def close(self) -> None:
+        """Stop generation admission and settle every active top-level attempt.
+
+        Cancellation of this close operation is deferred until provider, heartbeat,
+        claim-release, and pipeline cleanup owned by each attempt have completed.
+        """
+
+        self._generation_admission_open = False
+        current = asyncio.current_task()
+        active = tuple(
+            task
+            for task in self._active_generation_tasks
+            if task is not current and not task.done()
+        )
+        for task in active:
+            task.cancel()
+        if not active:
+            return
+
+        settlement = asyncio.create_task(self._settle_generation_tasks(active))
+        cancellation: asyncio.CancelledError | None = None
+        while not settlement.done():
+            try:
+                await asyncio.shield(settlement)
+            except asyncio.CancelledError as error:
+                cancellation = error
+                continue
+        settlement.result()
+        if cancellation is not None:
+            raise cancellation
+
+    async def _generate_round(self, round_id: str) -> RoundRecord:
         """Run one claimed provider attempt and persist its bounded outcome."""
 
         claims, pipeline, owner_instance = self._require_generation_dependencies()
@@ -311,6 +353,23 @@ class GameRoundService:
         except asyncio.CancelledError:
             await self._release_cancelled_attempt(claims, round_id, claim)
             raise
+
+    def _admit_generation(self) -> asyncio.Task[object]:
+        """Register the current request before its first generation await."""
+
+        if not self._generation_admission_open:
+            raise GameRoundConflictError("generation service is shutting down")
+        task = asyncio.current_task()
+        if task is None:
+            raise RuntimeError("generation requires an asyncio task")
+        self._active_generation_tasks.add(task)
+        return task
+
+    @staticmethod
+    async def _settle_generation_tasks(tasks: tuple[asyncio.Task[object], ...]) -> None:
+        """Await all tracked attempts without letting one failure skip another."""
+
+        await asyncio.gather(*tasks, return_exceptions=True)
 
     async def abandon_generation(self, round_id: str) -> RoundRecord:
         """Atomically abandon generation and fence any late provider result."""

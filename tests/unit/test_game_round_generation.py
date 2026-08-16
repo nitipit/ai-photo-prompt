@@ -592,6 +592,43 @@ async def test_second_cancellation_waits_for_claim_cleanup(setup) -> None:
 
 
 @pytest.mark.asyncio
+async def test_close_defers_repeated_cancellation_until_active_attempt_settles(setup) -> None:
+    repository, claims, clock = setup
+    delayed_claims = DelayedClaimBoundary(claims)
+    pipeline = CancellablePipeline()
+    service = service_for(repository, delayed_claims, clock, pipeline)
+    generating = await prepare_generating(service)
+
+    generation = asyncio.create_task(service.generate_round(generating.id))
+    assert await asyncio.to_thread(delayed_claims.claim_started.wait, 5)
+    delayed_claims.allow_claim.set()
+    await pipeline.started.wait()
+    delayed_claims.delay_release = True
+
+    close = asyncio.create_task(service.close())
+    assert await asyncio.to_thread(delayed_claims.release_started.wait, 5)
+    close.cancel()
+    close.cancel()
+
+    with pytest.raises(asyncio.TimeoutError):
+        await asyncio.wait_for(asyncio.shield(close), timeout=0.05)
+    with pytest.raises(GameRoundConflictError, match="shutting down"):
+        await service.generate_round(generating.id)
+
+    delayed_claims.allow_release.set()
+    with pytest.raises(asyncio.CancelledError):
+        await close
+    with pytest.raises(asyncio.CancelledError):
+        await generation
+    assert pipeline.cancelled.is_set()
+    assert claims.get(generating.id) is None
+
+    restarted = service_for(repository, claims, clock)
+    retried = await restarted.generate_round(generating.id)
+    assert retried.state is GameState.GENERATED_REVEAL
+
+
+@pytest.mark.asyncio
 async def test_pipeline_timeout_is_a_retryable_failure_and_releases_claim(setup) -> None:
     repository, claims, clock = setup
     pipeline = BlockingPipeline(expected_timeout=0.01)

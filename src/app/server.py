@@ -13,13 +13,13 @@ from fastapi import FastAPI, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from shelfdb.shelf import DB  # type: ignore[import-untyped]
+from starlette.routing import Mount
 
 from .ai import FakeAIPipeline
 from .ai.generated_artifacts import GeneratedArtifactStore
 from .ai.pi_pipeline import PiAIPipeline
 from .config import (
     AI_PROVIDER_ENV,
-    DEFAULT_AI_PROVIDER,
     DEFAULT_CATALOG_PATH,
     DEFAULT_DB_PATH,
     DEFAULT_GENERATED_ROOT,
@@ -74,8 +74,20 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
 
     catalog_path = Path(getattr(application.state, "catalog_path", DEFAULT_CATALOG_PATH))
     db_path = Path(getattr(application.state, "db_path", DEFAULT_DB_PATH))
-    pipeline, artifact_store, provider_timeout = _build_ai_pipeline(application)
+    configured_generated_root = Path(
+        getattr(application.state, "generated_root", DEFAULT_GENERATED_ROOT)
+    )
+    pipeline, artifact_store, provider_timeout = _build_ai_pipeline(
+        application,
+        configured_generated_root,
+    )
+    generated_root = _prepare_runtime_directory(
+        artifact_store.published_root if artifact_store is not None else configured_generated_root,
+        "generated artifact root",
+    )
+    _configure_generated_static_mount(application, generated_root)
     db: DB | None = None
+    game_round_service: GameRoundService | None = None
     try:
         source_catalog = ChallengeCatalog.load(catalog_path)
         db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -115,35 +127,43 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
         yield
     finally:
         try:
-            if db is not None:
-                db.close()
+            if game_round_service is not None:
+                await game_round_service.close()
         finally:
-            for name in (
-                "db",
-                "catalog",
-                "challenge_repository",
-                "round_repository",
-                "generation_claims",
-                "artifact_store",
-                "active_ai_provider",
-                "game_round_service",
-            ):
-                if hasattr(application.state, name):
-                    delattr(application.state, name)
+            try:
+                if db is not None:
+                    db.close()
+            finally:
+                for name in (
+                    "db",
+                    "catalog",
+                    "challenge_repository",
+                    "round_repository",
+                    "generation_claims",
+                    "artifact_store",
+                    "active_ai_provider",
+                    "game_round_service",
+                ):
+                    if hasattr(application.state, name):
+                        delattr(application.state, name)
 
 
 def _build_ai_pipeline(
     application: FastAPI,
+    generated_root: Path,
 ) -> tuple[FakeAIPipeline | PiAIPipeline, GeneratedArtifactStore | None, float]:
     """Build the explicitly selected provider without silent fallback."""
 
-    selected = str(
-        getattr(
-            application.state,
-            "ai_provider",
-            os.environ.get(AI_PROVIDER_ENV, DEFAULT_AI_PROVIDER),
+    configured = (
+        application.state.ai_provider
+        if hasattr(application.state, "ai_provider")
+        else os.environ.get(AI_PROVIDER_ENV)
+    )
+    if configured is None or not str(configured).strip():
+        raise RuntimeError(
+            f"{AI_PROVIDER_ENV} must explicitly select the 'fake' or 'pi' AI provider"
         )
-    ).strip()
+    selected = str(configured).strip()
     if selected == "fake":
         return FakeAIPipeline(), None, 10.0
     if selected != "pi":
@@ -160,10 +180,15 @@ def _build_ai_pipeline(
     workspace_root = Path(
         getattr(application.state, "pi_workspace_root", DEFAULT_PI_WORKSPACE_ROOT)
     )
-    generated_root = Path(getattr(application.state, "generated_root", DEFAULT_GENERATED_ROOT))
-    workspace_root.mkdir(parents=True, exist_ok=True)
-    generated_root.mkdir(parents=True, exist_ok=True)
     artifact_store = GeneratedArtifactStore(workspace_root, generated_root)
+    workspace_root = _prepare_runtime_directory(
+        artifact_store.private_root,
+        "Pi workspace root",
+    )
+    generated_root = _prepare_runtime_directory(
+        artifact_store.published_root,
+        "generated artifact root",
+    )
     provider = str(getattr(application.state, "pi_provider", DEFAULT_PI_PROVIDER))
     model = str(getattr(application.state, "pi_model", DEFAULT_PI_MODEL))
     image_argv = _pi_rpc_argv(
@@ -205,6 +230,31 @@ def _build_ai_pipeline(
         rpc_cwd=workspace_root,
     )
     return pipeline, artifact_store, timeout
+
+
+def _prepare_runtime_directory(path: Path, label: str) -> Path:
+    """Create and resolve one configured runtime directory before serving requests."""
+
+    candidate = path.expanduser()
+    if candidate.is_symlink():
+        raise RuntimeError(f"{label} must not be a symlink")
+    try:
+        candidate.mkdir(parents=True, exist_ok=True)
+    except OSError as error:
+        raise RuntimeError(f"{label} is unavailable") from error
+    if not candidate.is_dir():
+        raise RuntimeError(f"{label} must be a directory")
+    return candidate.resolve()
+
+
+def _configure_generated_static_mount(application: FastAPI, generated_root: Path) -> None:
+    """Bind /generated to the validated store root before request admission."""
+
+    for route in application.router.routes:
+        if isinstance(route, Mount) and route.name == "generated-artifacts":
+            route.app = StaticFiles(directory=generated_root)
+            return
+    raise RuntimeError("generated artifact static mount is unavailable")
 
 
 def _pi_rpc_argv(

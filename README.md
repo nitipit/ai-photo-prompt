@@ -9,8 +9,9 @@ deno task app:build
 deno task app:serve
 ```
 
-`app:serve` selects the real Pi provider. The machine must have `pi` available,
-a signed-in Codex account, and
+`app:serve` explicitly sets `PHOTO_PROMPT_AI_PROVIDER=pi`; startup rejects a
+missing provider selection rather than falling back to fake AI. The machine must have `pi`
+available, a signed-in Codex account, and
 `~/.pi/agent/extensions/codex-bridge.ts`. No separate API key is required.
 Generated images are retained under `data/generated/`.
 
@@ -31,5 +32,5 @@ Focused checks (build first so generated challenge assets are available):
 deno task app:build
 deno task check
 deno task lint
-uv run pytest tests/integration/test_web_smoke.py
+PHOTO_PROMPT_AI_PROVIDER=fake uv run pytest tests/integration/test_web_smoke.py
 ```
