@@ -90,6 +90,7 @@ def test_pi_provider_is_explicit_and_never_falls_back_to_fake(
         assert runtime_app.state.artifact_store.private_root == tmp_path / "pi-rpc"
         assert runtime_app.state.artifact_store.published_root == tmp_path / "generated"
         assert service._provider_timeout == 240.0
+        assert service._pipeline._max_stdout_bytes == 32 * 1024 * 1024
         assert "codex_imagegen" in service._pipeline._image_argv
         assert "codex_imagegen" not in service._pipeline._evaluator_argv
 

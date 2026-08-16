@@ -20,7 +20,7 @@ DEFAULT_PI_MODEL = "gpt-5.6-luna"
 DEFAULT_PI_IMAGE_THINKING = "minimal"
 DEFAULT_PI_EVALUATOR_THINKING = "medium"
 DEFAULT_PI_TIMEOUT_SECONDS = 240.0
-DEFAULT_PI_MAX_OUTPUT_BYTES = 1024 * 1024
+DEFAULT_PI_MAX_OUTPUT_BYTES = 32 * 1024 * 1024
 
 # Temporary until the round service owns real round creation and identifiers.
 DEMO_ROUND_ID = "demo"
