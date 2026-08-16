@@ -95,6 +95,7 @@ _REVEAL_DURATION = timedelta(seconds=5)
 _LEADERBOARD_DURATION = timedelta(seconds=15)
 _MAX_LEADERBOARD_ROWS = 4
 _DEFAULT_CLAIM_LEASE = timedelta(seconds=30)
+_DEFAULT_CLAIM_HEARTBEAT = timedelta(seconds=5)
 _DEFAULT_PROVIDER_TIMEOUT = 10.0
 _PROVIDER_TIMEOUT_CODE = "provider_timeout"
 _PROVIDER_TIMEOUT_MESSAGE = "การประมวลผล AI ใช้เวลานานเกินไป"
@@ -127,6 +128,7 @@ class GameRoundService:
         pipeline: AIPipelineRunner | None = None,
         owner_instance: str | None = None,
         claim_lease_duration: timedelta = _DEFAULT_CLAIM_LEASE,
+        claim_heartbeat_interval: timedelta = _DEFAULT_CLAIM_HEARTBEAT,
         provider_timeout: float = _DEFAULT_PROVIDER_TIMEOUT,
     ) -> None:
         self._repository = repository
@@ -137,8 +139,13 @@ class GameRoundService:
         self._pipeline = pipeline
         self._owner_instance = owner_instance
         self._claim_lease_duration = claim_lease_duration
+        self._claim_heartbeat_interval = claim_heartbeat_interval
         self._provider_timeout = provider_timeout
-        self._validate_generation_timing(claim_lease_duration, provider_timeout)
+        self._validate_generation_timing(
+            claim_lease_duration,
+            claim_heartbeat_interval,
+            provider_timeout,
+        )
 
     async def create_round(self, display_name: str = "") -> RoundRecord:
         """Create a fresh round in level selection with normalized identity."""
@@ -286,24 +293,14 @@ class GameRoundService:
             raise GameRoundConflictError(f"cannot generate from {record.state.value}") from error
 
         try:
-            try:
-                raw_result = await asyncio.wait_for(
-                    pipeline.run(challenge, prompt, timeout=self._provider_timeout),
-                    timeout=self._provider_timeout,
-                )
-            except asyncio.CancelledError:
-                raise
-            except TimeoutError:
-                raw_result = self._bounded_failure_result(
-                    _PROVIDER_TIMEOUT_CODE,
-                    _PROVIDER_TIMEOUT_MESSAGE,
-                )
-            except Exception:
-                raw_result = self._bounded_failure_result(
-                    _PROVIDER_ERROR_CODE,
-                    _PROVIDER_ERROR_MESSAGE,
-                )
-
+            raw_result = await self._run_claimed_pipeline(
+                claims,
+                pipeline,
+                round_id,
+                claim,
+                challenge,
+                prompt,
+            )
             result = self._normalize_pipeline_result(raw_result)
             if result.status is PipelineResultStatus.SUCCESS:
                 return await self._persist_generation_success(record, result, claims, claim)
@@ -519,6 +516,129 @@ class GameRoundService:
         visible_entries = self._leaderboard_window(entries, current_index)
         return LeaderboardProjection(visible_entries, current_rank)
 
+    async def _run_claimed_pipeline(
+        self,
+        claims: ShelfDbGenerationClaims,
+        pipeline: AIPipelineRunner,
+        round_id: str,
+        claim: AttemptClaim,
+        challenge: ChallengeSpec,
+        prompt: str,
+    ) -> AIPipelineResult:
+        """Supervise provider work while fencing its claim with a heartbeat."""
+
+        provider_task = asyncio.create_task(self._run_provider(pipeline, challenge, prompt))
+        heartbeat_task = asyncio.create_task(self._renew_claim_loop(claims, round_id, claim))
+        try:
+            done, _pending = await asyncio.wait(
+                {provider_task, heartbeat_task},
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if heartbeat_task in done:
+                heartbeat_error = (
+                    asyncio.CancelledError()
+                    if heartbeat_task.cancelled()
+                    else heartbeat_task.exception()
+                )
+                await self._cancel_and_settle_task(provider_task)
+                try:
+                    await self._release_cancelled_attempt(claims, round_id, claim)
+                except Exception as release_error:
+                    raise GameRoundConflictError("generation attempt is stale") from release_error
+                if heartbeat_error is None or isinstance(heartbeat_error, asyncio.CancelledError):
+                    raise GameRoundConflictError("generation attempt is stale")
+                raise GameRoundConflictError("generation attempt is stale") from heartbeat_error
+            return await provider_task
+        except asyncio.CancelledError as cancellation:
+            supervision_cleanup_error: BaseException | None = None
+            for task in (provider_task, heartbeat_task):
+                task_error = await self._cancel_and_settle_task(task)
+                if (
+                    task_error is not None
+                    and not isinstance(task_error, asyncio.CancelledError)
+                    and supervision_cleanup_error is None
+                ):
+                    supervision_cleanup_error = task_error
+            if supervision_cleanup_error is not None:
+                raise cancellation from supervision_cleanup_error
+            raise
+        finally:
+            if provider_task.done() and not heartbeat_task.done():
+                await self._cancel_and_settle_task(heartbeat_task)
+
+    async def _run_provider(
+        self,
+        pipeline: AIPipelineRunner,
+        challenge: ChallengeSpec,
+        prompt: str,
+    ) -> AIPipelineResult:
+        """Return a bounded provider outcome without handling claim ownership."""
+
+        try:
+            return await asyncio.wait_for(
+                pipeline.run(challenge, prompt, timeout=self._provider_timeout),
+                timeout=self._provider_timeout,
+            )
+        except asyncio.CancelledError:
+            raise
+        except TimeoutError:
+            return self._bounded_failure_result(
+                _PROVIDER_TIMEOUT_CODE,
+                _PROVIDER_TIMEOUT_MESSAGE,
+            )
+        except Exception:
+            return self._bounded_failure_result(
+                _PROVIDER_ERROR_CODE,
+                _PROVIDER_ERROR_MESSAGE,
+            )
+
+    async def _renew_claim_loop(
+        self,
+        claims: ShelfDbGenerationClaims,
+        round_id: str,
+        claim: AttemptClaim,
+    ) -> None:
+        """Renew one matching claim until provider supervision is settled."""
+
+        interval = self._claim_heartbeat_interval.total_seconds()
+        while True:
+            await asyncio.sleep(interval)
+            await self._renew_claim(claims, round_id, claim)
+
+    async def _renew_claim(
+        self,
+        claims: ShelfDbGenerationClaims,
+        round_id: str,
+        claim: AttemptClaim,
+    ) -> None:
+        """Run the complete synchronous renewal unit outside the event loop."""
+
+        now = self._timestamp()
+        lease_expires_at = (self._as_datetime(now) + self._claim_lease_duration).isoformat()
+        renewal = asyncio.create_task(
+            asyncio.to_thread(
+                claims.renew,
+                round_id,
+                claim.attempt_token,
+                lease_expires_at,
+                now,
+            )
+        )
+        try:
+            renewed = await asyncio.shield(renewal)
+        except asyncio.CancelledError as cancellation:
+            renewal_error = await self._settle_cancelled_task(renewal)
+            if renewal_error is not None and not isinstance(renewal_error, asyncio.CancelledError):
+                raise cancellation from renewal_error
+            raise
+
+        if (
+            not isinstance(renewed, AttemptClaim)
+            or renewed.attempt_token != claim.attempt_token
+            or renewed.owner_instance != claim.owner_instance
+        ):
+            raise StaleAttemptTokenError(f"stale attempt token for round: {round_id}")
+
     async def _persist_generation_success(
         self,
         record: RoundRecord,
@@ -633,6 +753,16 @@ class GameRoundService:
                 except Exception as cleanup_error:
                     raise cancellation from cleanup_error
             raise
+
+    async def _cancel_and_settle_task(
+        self,
+        task: asyncio.Task[object],
+    ) -> BaseException | None:
+        """Cancel a supervised task and wait through repeated cancellation."""
+
+        if not task.done():
+            task.cancel()
+        return await self._settle_cancelled_task(task)
 
     async def _release_cancelled_attempt(
         self,
@@ -831,10 +961,21 @@ class GameRoundService:
     @staticmethod
     def _validate_generation_timing(
         claim_lease_duration: timedelta,
+        claim_heartbeat_interval: timedelta,
         provider_timeout: float,
     ) -> None:
         if not isinstance(claim_lease_duration, timedelta):
             raise GameRoundValidationError("claim lease duration must be a timedelta")
+        if claim_lease_duration.total_seconds() <= 0:
+            raise GameRoundValidationError("claim lease duration must be positive")
+        if not isinstance(claim_heartbeat_interval, timedelta):
+            raise GameRoundValidationError("claim heartbeat interval must be a timedelta")
+        if claim_heartbeat_interval.total_seconds() <= 0:
+            raise GameRoundValidationError("claim heartbeat interval must be positive")
+        if claim_heartbeat_interval >= claim_lease_duration:
+            raise GameRoundValidationError(
+                "claim heartbeat interval must be shorter than claim lease duration"
+            )
         if (
             isinstance(provider_timeout, bool)
             or not isinstance(provider_timeout, (int, float))
@@ -842,10 +983,6 @@ class GameRoundService:
             or provider_timeout <= 0
         ):
             raise GameRoundValidationError("provider timeout must be a positive finite number")
-        if claim_lease_duration.total_seconds() <= provider_timeout:
-            raise GameRoundValidationError(
-                "claim lease duration must be longer than provider timeout"
-            )
 
     async def _replace_current(
         self,

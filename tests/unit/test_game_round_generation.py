@@ -13,6 +13,7 @@ from app.ai.pipeline import FakeAIPipeline
 from app.ai.results import AIPipelineResult
 from app.content.repository import ChallengeCatalog
 from app.domain.models import (
+    AttemptClaim,
     ChallengeSpec,
     FailureDetail,
     GameState,
@@ -77,6 +78,10 @@ class RecordingClaims:
     def get(self, round_id):
         self.calls.append(("get", get_ident()))
         return self.claims.get(round_id)
+
+    def renew(self, round_id, attempt_token, lease_expires_at, now):
+        self.calls.append(("renew", get_ident()))
+        return self.claims.renew(round_id, attempt_token, lease_expires_at, now)
 
     def replace_round_and_release(self, record, attempt_token, now, *, expected=None):
         self.calls.append(("replace_round_and_release", get_ident()))
@@ -190,6 +195,77 @@ class DelayedClaimBoundary:
         return self.claims.replace_round_and_clear_claim(record, expected=expected)
 
 
+class HeartbeatClaims(RecordingClaims):
+    def __init__(self, claims: ShelfDbGenerationClaims) -> None:
+        super().__init__(claims)
+        self.renew_calls: list[tuple[str, str, str, str]] = []
+        self.renew_started = Event()
+        self.renew_finished = Event()
+        self.allow_renew = Event()
+        self.block_renew = False
+        self.fail_renew = False
+
+    def renew(self, round_id, attempt_token, lease_expires_at, now):
+        self.renew_calls.append((round_id, attempt_token, lease_expires_at, now))
+        self.renew_started.set()
+        if self.block_renew:
+            self.allow_renew.wait(timeout=5)
+        self.renew_finished.set()
+        if self.fail_renew:
+            raise RuntimeError("renewal lost")
+        return self.claims.renew(round_id, attempt_token, lease_expires_at, now)
+
+
+class AdvancingHeartbeatClaims(HeartbeatClaims):
+    def __init__(self, claims: ShelfDbGenerationClaims, clock: MutableClock) -> None:
+        super().__init__(claims)
+        self.clock = clock
+
+    def renew(self, round_id, attempt_token, lease_expires_at, now):
+        renewed = super().renew(round_id, attempt_token, lease_expires_at, now)
+        self.clock.current += timedelta(seconds=25)
+        return renewed
+
+
+class ReplacementOnRenewClaims(HeartbeatClaims):
+    def __init__(self, claims: ShelfDbGenerationClaims, clock: MutableClock) -> None:
+        super().__init__(claims)
+        self.clock = clock
+
+    def renew(self, round_id, attempt_token, lease_expires_at, now):
+        self.renew_calls.append((round_id, attempt_token, lease_expires_at, now))
+        self.renew_started.set()
+        self.clock.current += timedelta(seconds=31)
+        replacement_now = self.clock.current.isoformat()
+        replacement = AttemptClaim(
+            attempt_token="replacement-token",
+            owner_instance="replacement-worker",
+            claimed_at=replacement_now,
+            lease_expires_at=(self.clock.current + timedelta(seconds=30)).isoformat(),
+        )
+        self.claims.claim(round_id, replacement, replacement_now)
+        self.renew_finished.set()
+        raise RuntimeError("renewal replaced")
+
+
+class CancellablePipeline(BlockingPipeline):
+    def __init__(self, expected_timeout: float = 10.0) -> None:
+        super().__init__(expected_timeout=expected_timeout)
+        self.cancelled = Event()
+
+    async def run(self, challenge: ChallengeSpec, prompt: str, timeout: float) -> AIPipelineResult:
+        self.calls += 1
+        assert prompt == "เด็กวาดภาพในสวน"
+        assert timeout == self.expected_timeout
+        self.started.set()
+        try:
+            await self.release.wait()
+        except asyncio.CancelledError:
+            self.cancelled.set()
+            raise
+        return success_result(challenge)
+
+
 def make_catalog() -> ChallengeCatalog:
     challenges = []
     for level in LevelGroup:
@@ -263,6 +339,7 @@ def service_for(
     pipeline=None,
     provider_timeout=10.0,
     claim_lease_duration=timedelta(seconds=30),
+    claim_heartbeat_interval=timedelta(seconds=5),
 ) -> GameRoundService:
     return GameRoundService(
         repository,
@@ -273,6 +350,7 @@ def service_for(
         pipeline=pipeline if pipeline is not None else FakeAIPipeline(),
         owner_instance="test-worker",
         claim_lease_duration=claim_lease_duration,
+        claim_heartbeat_interval=claim_heartbeat_interval,
         provider_timeout=provider_timeout,
     )
 
@@ -525,6 +603,158 @@ async def test_pipeline_timeout_is_a_retryable_failure_and_releases_claim(setup)
 
 
 @pytest.mark.asyncio
+async def test_long_provider_renews_claim_multiple_times_before_success(setup) -> None:
+    repository, claims, clock = setup
+    heartbeat_claims = AdvancingHeartbeatClaims(claims, clock)
+    pipeline = BlockingPipeline(expected_timeout=70.0)
+    service = service_for(
+        repository,
+        heartbeat_claims,
+        clock,
+        pipeline,
+        provider_timeout=70.0,
+        claim_lease_duration=timedelta(seconds=30),
+        claim_heartbeat_interval=timedelta(milliseconds=5),
+    )
+    generating = await prepare_generating(service)
+
+    attempt = asyncio.create_task(service.generate_round(generating.id))
+    await pipeline.started.wait()
+    for _ in range(3):
+        assert await asyncio.to_thread(heartbeat_claims.renew_finished.wait, 5)
+        heartbeat_claims.renew_finished.clear()
+
+    pipeline.release.set()
+    generated = await attempt
+
+    assert generated.state is GameState.GENERATED_REVEAL
+    assert len(heartbeat_claims.renew_calls) >= 3
+    assert clock.current >= datetime(2026, 1, 1, 0, 1, 15, tzinfo=UTC)
+    assert claims.get(generating.id) is None
+
+
+@pytest.mark.asyncio
+async def test_renewal_loss_cancels_provider_and_does_not_write_round(setup) -> None:
+    repository, claims, clock = setup
+    heartbeat_claims = HeartbeatClaims(claims)
+    heartbeat_claims.fail_renew = True
+    pipeline = CancellablePipeline(expected_timeout=70.0)
+    service = service_for(
+        repository,
+        heartbeat_claims,
+        clock,
+        pipeline,
+        provider_timeout=70.0,
+        claim_heartbeat_interval=timedelta(milliseconds=5),
+    )
+    generating = await prepare_generating(service)
+    before = await service.get_round(generating.id)
+
+    attempt = asyncio.create_task(service.generate_round(generating.id))
+    await pipeline.started.wait()
+    assert await asyncio.to_thread(heartbeat_claims.renew_started.wait, 5)
+
+    with pytest.raises(GameRoundConflictError, match="stale"):
+        await attempt
+
+    assert pipeline.cancelled.is_set()
+    assert (await service.get_round(generating.id)).dict() == before.dict()
+    assert claims.get(generating.id) is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("_iteration", range(20))
+async def test_renewal_loss_never_deletes_replacement_token(setup, _iteration: int) -> None:
+    repository, claims, clock = setup
+    heartbeat_claims = ReplacementOnRenewClaims(claims, clock)
+    pipeline = CancellablePipeline(expected_timeout=70.0)
+    service = service_for(
+        repository,
+        heartbeat_claims,
+        clock,
+        pipeline,
+        provider_timeout=70.0,
+        claim_heartbeat_interval=timedelta(milliseconds=5),
+    )
+    generating = await prepare_generating(service)
+
+    attempt = asyncio.create_task(service.generate_round(generating.id))
+    await pipeline.started.wait()
+    assert await asyncio.to_thread(heartbeat_claims.renew_started.wait, 5)
+
+    with pytest.raises(GameRoundConflictError, match="stale"):
+        await attempt
+
+    replacement = claims.get(generating.id)
+    assert replacement is not None
+    assert replacement.attempt_token == "replacement-token"
+    assert pipeline.cancelled.is_set()
+
+
+@pytest.mark.asyncio
+async def test_normal_completion_settles_blocked_heartbeat_before_commit(setup) -> None:
+    repository, claims, clock = setup
+    heartbeat_claims = HeartbeatClaims(claims)
+    heartbeat_claims.block_renew = True
+    pipeline = BlockingPipeline(expected_timeout=70.0)
+    service = service_for(
+        repository,
+        heartbeat_claims,
+        clock,
+        pipeline,
+        provider_timeout=70.0,
+        claim_heartbeat_interval=timedelta(milliseconds=5),
+    )
+    generating = await prepare_generating(service)
+
+    attempt = asyncio.create_task(service.generate_round(generating.id))
+    await pipeline.started.wait()
+    assert await asyncio.to_thread(heartbeat_claims.renew_started.wait, 5)
+    pipeline.release.set()
+
+    with pytest.raises(asyncio.TimeoutError):
+        await asyncio.wait_for(asyncio.shield(attempt), timeout=0.05)
+    assert not attempt.done()
+
+    heartbeat_claims.allow_renew.set()
+    generated = await attempt
+    assert generated.state is GameState.GENERATED_REVEAL
+    assert claims.get(generating.id) is None
+
+
+@pytest.mark.asyncio
+async def test_cancellation_settles_blocked_heartbeat_and_second_cancellation(setup) -> None:
+    repository, claims, clock = setup
+    heartbeat_claims = HeartbeatClaims(claims)
+    heartbeat_claims.block_renew = True
+    pipeline = CancellablePipeline()
+    service = service_for(
+        repository,
+        heartbeat_claims,
+        clock,
+        pipeline,
+        claim_heartbeat_interval=timedelta(milliseconds=5),
+    )
+    generating = await prepare_generating(service)
+
+    attempt = asyncio.create_task(service.generate_round(generating.id))
+    await pipeline.started.wait()
+    assert await asyncio.to_thread(heartbeat_claims.renew_started.wait, 5)
+    attempt.cancel()
+    await asyncio.sleep(0)
+    attempt.cancel()
+
+    with pytest.raises(asyncio.TimeoutError):
+        await asyncio.wait_for(asyncio.shield(attempt), timeout=0.05)
+    assert pipeline.cancelled.is_set()
+
+    heartbeat_claims.allow_renew.set()
+    with pytest.raises(asyncio.CancelledError):
+        await attempt
+    assert claims.get(generating.id) is None
+
+
+@pytest.mark.asyncio
 async def test_concurrent_generation_claims_run_blocking_pipeline_once(setup) -> None:
     repository, claims, clock = setup
     pipeline = BlockingPipeline()
@@ -679,10 +909,32 @@ async def test_setup_only_service_rejects_generation_without_mutation(setup) -> 
     assert (await service.get_round(created.id)).dict() == before
 
 
-def test_claim_lease_must_outlast_provider_timeout(setup) -> None:
+@pytest.mark.parametrize(
+    ("lease", "heartbeat", "message"),
+    [
+        (timedelta(0), timedelta(seconds=1), "lease duration must be positive"),
+        (timedelta(seconds=10), timedelta(0), "heartbeat interval must be positive"),
+        (
+            timedelta(seconds=10),
+            timedelta(seconds=10),
+            "heartbeat interval must be shorter",
+        ),
+        (
+            timedelta(seconds=10),
+            timedelta(seconds=11),
+            "heartbeat interval must be shorter",
+        ),
+    ],
+)
+def test_claim_timing_rejects_unsafe_lease_and_heartbeat_values(
+    setup,
+    lease: timedelta,
+    heartbeat: timedelta,
+    message: str,
+) -> None:
     repository, claims, clock = setup
 
-    with pytest.raises(GameRoundValidationError, match="longer"):
+    with pytest.raises(GameRoundValidationError, match=message):
         GameRoundService(
             repository,
             make_catalog(),
@@ -691,6 +943,24 @@ def test_claim_lease_must_outlast_provider_timeout(setup) -> None:
             generation_claims=claims,
             pipeline=FakeAIPipeline(),
             owner_instance="test-worker",
-            claim_lease_duration=timedelta(seconds=10),
-            provider_timeout=10,
+            claim_lease_duration=lease,
+            claim_heartbeat_interval=heartbeat,
+            provider_timeout=70,
         )
+
+
+def test_provider_timeout_may_exceed_claim_lease_with_heartbeat(setup) -> None:
+    repository, claims, clock = setup
+
+    GameRoundService(
+        repository,
+        make_catalog(),
+        lambda choices: choices[0],
+        clock,
+        generation_claims=claims,
+        pipeline=FakeAIPipeline(),
+        owner_instance="test-worker",
+        claim_lease_duration=timedelta(seconds=10),
+        claim_heartbeat_interval=timedelta(seconds=5),
+        provider_timeout=70,
+    )
