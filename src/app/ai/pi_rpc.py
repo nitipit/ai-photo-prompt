@@ -86,7 +86,7 @@ class PiImageAttachment:
 
 @dataclass(frozen=True, slots=True)
 class PiRPCRequest:
-    """All bounds and authorization for one isolated Pi RPC attempt."""
+    """All transport bounds and tool/confirmation authorization for one RPC attempt."""
 
     argv: Sequence[str]
     cwd: Path
@@ -96,17 +96,22 @@ class PiRPCRequest:
     max_stderr_bytes: int
     attachments: Sequence[PiImageAttachment] = ()
     authorize_confirmation: bool = False
+    allowed_tool_names: Sequence[str] = ()
+    max_tool_starts: int = 0
+    max_jsonl_records: int = 4096
+    max_evidence_records: int = 64
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "argv", tuple(self.argv))
         object.__setattr__(self, "cwd", Path(self.cwd))
         object.__setattr__(self, "attachments", tuple(self.attachments))
+        object.__setattr__(self, "allowed_tool_names", tuple(self.allowed_tool_names))
         _validate_request(self)
 
 
 @dataclass(frozen=True, slots=True)
 class PiRPCResult:
-    """Structured records collected from one settled Pi RPC attempt."""
+    """Bounded protocol evidence collected from one settled Pi RPC attempt."""
 
     command_id: str
     prompt_response: dict[str, Any]
@@ -165,6 +170,7 @@ class _ReaderFailure:
 
 
 _QueueItem = _Record | _StreamEnd | _ReaderFailure
+_MAX_PENDING_RECORDS = 32
 
 
 def _validate_request(request: PiRPCRequest) -> None:
@@ -188,6 +194,22 @@ def _validate_request(request: PiRPCRequest) -> None:
         raise TypeError("authorize_confirmation must be a boolean")
     if any(not isinstance(item, PiImageAttachment) for item in request.attachments):
         raise TypeError("attachments must contain PiImageAttachment values")
+    if any(type(name) is not str or not name for name in request.allowed_tool_names):
+        raise ValueError("allowed_tool_names must contain non-empty strings")
+    if len(set(request.allowed_tool_names)) != len(request.allowed_tool_names):
+        raise ValueError("allowed_tool_names must be unique")
+    if type(request.max_tool_starts) is not int or request.max_tool_starts < 0:
+        raise ValueError("max_tool_starts must be a non-negative integer")
+    if bool(request.allowed_tool_names) != (request.max_tool_starts > 0):
+        raise ValueError("allowed_tool_names and max_tool_starts must permit tools together")
+    for name, value in (
+        ("max_jsonl_records", request.max_jsonl_records),
+        ("max_evidence_records", request.max_evidence_records),
+    ):
+        if type(value) is not int or value <= 0:
+            raise ValueError(f"{name} must be a positive integer")
+    if request.max_evidence_records > request.max_jsonl_records:
+        raise ValueError("max_evidence_records cannot exceed max_jsonl_records")
 
 
 def _reject_constant(value: str) -> None:
@@ -226,9 +248,11 @@ async def _read_stdout(
     stream: asyncio.StreamReader,
     queue: asyncio.Queue[_QueueItem],
     capture: _ByteCapture,
+    max_records: int,
 ) -> None:
     buffer = bytearray()
     failed = False
+    record_count = 0
     try:
         while True:
             chunk = await stream.read(4096)
@@ -249,6 +273,12 @@ async def _read_stdout(
                     break
                 line = bytes(buffer[:newline])
                 del buffer[: newline + 1]
+                record_count += 1
+                if record_count > max_records:
+                    await queue.put(_ReaderFailure("stdout", "record_limit"))
+                    failed = True
+                    buffer.clear()
+                    break
                 parsed = _parse_record(line)
                 if isinstance(parsed, str):
                     await queue.put(_ReaderFailure("stdout", parsed))
@@ -257,11 +287,15 @@ async def _read_stdout(
                     break
                 await queue.put(_Record(parsed))
         if not failed and buffer:
-            parsed = _parse_record(bytes(buffer))
-            if isinstance(parsed, str):
-                await queue.put(_ReaderFailure("stdout", parsed))
+            record_count += 1
+            if record_count > max_records:
+                await queue.put(_ReaderFailure("stdout", "record_limit"))
             else:
-                await queue.put(_Record(parsed))
+                parsed = _parse_record(bytes(buffer))
+                if isinstance(parsed, str):
+                    await queue.put(_ReaderFailure("stdout", parsed))
+                else:
+                    await queue.put(_Record(parsed))
     except asyncio.CancelledError:
         raise
     except Exception:
@@ -412,8 +446,10 @@ async def run_pi_rpc(request: PiRPCRequest) -> PiRPCResult:
     """Run one bounded Pi RPC request and return structured protocol evidence.
 
     ``authorize_confirmation`` allows one correlated ``confirm`` UI request to
-    receive a positive response.  A false value receives a negative response
-    and fails the attempt, so adapters cannot accidentally consume quota.
+    receive a positive response. A false value receives a negative response and
+    fails the attempt. Tool starts are checked against the request policy before
+    execution may continue, while streaming records are backpressured and only
+    bounded protocol evidence is retained.
     """
 
     _validate_request(request)
@@ -448,9 +484,18 @@ async def run_pi_rpc(request: PiRPCRequest) -> PiRPCResult:
             raise PiRPCProcessError("could not start Pi RPC child", code="spawn_error") from error
 
         assert process.stdout is not None and process.stderr is not None
-        queue: asyncio.Queue[_QueueItem] = asyncio.Queue()
+        queue: asyncio.Queue[_QueueItem] = asyncio.Queue(
+            maxsize=min(_MAX_PENDING_RECORDS, request.max_jsonl_records)
+        )
         reader_tasks = [
-            asyncio.create_task(_read_stdout(process.stdout, queue, stdout_capture)),
+            asyncio.create_task(
+                _read_stdout(
+                    process.stdout,
+                    queue,
+                    stdout_capture,
+                    request.max_jsonl_records,
+                )
+            ),
             asyncio.create_task(_read_stderr(process.stderr, queue, stderr_capture)),
         ]
         process_wait = asyncio.create_task(process.wait())
@@ -459,20 +504,36 @@ async def run_pi_rpc(request: PiRPCRequest) -> PiRPCResult:
         events: list[dict[str, Any]] = []
         tool_completions: list[dict[str, Any]] = []
         completed_tool_call_ids: set[str] = set()
+        active_tool_call_ids: set[str] = set()
         started_tool_names: dict[str, str] = {}
+        allowed_tool_names = set(request.allowed_tool_names)
         prompt_response: dict[str, Any] | None = None
         assistant_text = ""
         confirmation_id: str | None = None
         confirmation_sent = False
+        saw_agent_end = False
         settled = False
         stdout_ended = False
 
+        def retain_event(event: dict[str, Any]) -> None:
+            if len(events) >= request.max_evidence_records:
+                raise PiRPCProtocolError(
+                    "protocol evidence exceeded the configured record bound",
+                    code="evidence_limit",
+                )
+            events.append(event)
+
         async def handle_item(item: _QueueItem) -> None:
             nonlocal assistant_text, confirmation_id, confirmation_sent, prompt_response
-            nonlocal settled, stdout_ended
+            nonlocal saw_agent_end, settled, stdout_ended
             if isinstance(item, _ReaderFailure):
                 if item.reason == "output_limit":
                     raise PiRPCOutputLimitError(item.stream)
+                if item.reason == "record_limit":
+                    raise PiRPCProtocolError(
+                        "stdout exceeded the configured JSONL record bound",
+                        code="record_limit",
+                    )
                 if item.stream == "stdout":
                     raise PiRPCProtocolError("stdout contained malformed or unreadable JSONL")
                 raise PiRPCProcessError(
@@ -497,7 +558,6 @@ async def run_pi_rpc(request: PiRPCRequest) -> PiRPCResult:
             event = item.value
             if settled:
                 raise PiRPCProtocolError("event arrived after agent_settled", code="late_event")
-            events.append(event)
             event_type = event.get("type")
 
             if (
@@ -528,6 +588,7 @@ async def run_pi_rpc(request: PiRPCRequest) -> PiRPCResult:
                         "prompt was rejected by the child", code="prompt_rejected"
                     )
                 prompt_response = event
+                retain_event(event)
                 return
 
             if event_type == "extension_ui_request":
@@ -551,6 +612,13 @@ async def run_pi_rpc(request: PiRPCRequest) -> PiRPCResult:
                     )
                 confirmation_id = request_id
                 confirmation_sent = True
+                retain_event(
+                    {
+                        "type": "extension_ui_request",
+                        "id": request_id,
+                        "method": "confirm",
+                    }
+                )
                 await _write_json(
                     process,
                     {
@@ -588,7 +656,25 @@ async def run_pi_rpc(request: PiRPCRequest) -> PiRPCResult:
                         raise PiRPCProtocolError(
                             "tool start was duplicated", code="duplicate_tool_start"
                         )
+                    if tool_name not in allowed_tool_names:
+                        raise PiRPCProtocolError(
+                            "tool start was not authorized by this request",
+                            code="unexpected_tool",
+                        )
+                    if len(started_tool_names) >= request.max_tool_starts:
+                        raise PiRPCProtocolError(
+                            "tool start exceeded this request's authorization",
+                            code="tool_start_limit",
+                        )
                     started_tool_names[tool_call_id] = tool_name
+                    active_tool_call_ids.add(tool_call_id)
+                    retain_event(
+                        {
+                            "type": "tool_execution_start",
+                            "toolCallId": tool_call_id,
+                            "toolName": tool_name,
+                        }
+                    )
                     return
 
                 started_name = started_tool_names.get(tool_call_id)
@@ -620,7 +706,9 @@ async def run_pi_rpc(request: PiRPCRequest) -> PiRPCResult:
                         "tool completion was duplicated", code="duplicate_tool_completion"
                     )
                 completed_tool_call_ids.add(tool_call_id)
+                active_tool_call_ids.remove(tool_call_id)
                 tool_completions.append(event)
+                retain_event(event)
                 return
 
             if event_type == "message_end":
@@ -639,12 +727,29 @@ async def run_pi_rpc(request: PiRPCRequest) -> PiRPCResult:
                         )
                 return
 
+            if event_type == "agent_end":
+                if not saw_agent_end:
+                    retain_event({"type": "agent_end"})
+                saw_agent_end = True
+                return
+
             if event_type == "agent_settled":
                 if prompt_response is None:
                     raise PiRPCProtocolError(
                         "agent_settled arrived before the prompt response",
                         code="prompt_response_missing",
                     )
+                if active_tool_call_ids or len(completed_tool_call_ids) != len(started_tool_names):
+                    raise PiRPCProtocolError(
+                        "agent_settled arrived with an incomplete tool execution",
+                        code="tool_incomplete",
+                    )
+                if not saw_agent_end:
+                    raise PiRPCProtocolError(
+                        "agent_settled arrived before agent_end",
+                        code="agent_end_missing",
+                    )
+                retain_event({"type": "agent_settled"})
                 settled = True
                 return
 
@@ -722,6 +827,10 @@ async def run_rpc(
     max_stderr_bytes: int,
     attachments: Sequence[PiImageAttachment] = (),
     authorize_confirmation: bool = False,
+    allowed_tool_names: Sequence[str] = (),
+    max_tool_starts: int = 0,
+    max_jsonl_records: int = 4096,
+    max_evidence_records: int = 64,
 ) -> PiRPCResult:
     """Convenience wrapper for callers that do not need a request object."""
 
@@ -735,6 +844,10 @@ async def run_rpc(
             max_stderr_bytes=max_stderr_bytes,
             attachments=attachments,
             authorize_confirmation=authorize_confirmation,
+            allowed_tool_names=allowed_tool_names,
+            max_tool_starts=max_tool_starts,
+            max_jsonl_records=max_jsonl_records,
+            max_evidence_records=max_evidence_records,
         )
     )
 

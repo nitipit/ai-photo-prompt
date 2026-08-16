@@ -189,6 +189,10 @@ async def test_success_uses_two_attachments_and_computes_only_application_score(
         requests.append(request)
         if request.argv == ("pi-image",):
             assert request.authorize_confirmation is True
+            assert request.allowed_tool_names == ("codex_imagegen",)
+            assert request.max_tool_starts == 1
+            assert request.max_jsonl_records == 4096
+            assert request.max_evidence_records == 64
             Path(request.cwd, "generated.png").write_bytes(b"generated-image")
             image_result = rpc_result(image=True, confirmation_sent=False)
             assert len(image_result.tool_completions) == 1
@@ -199,6 +203,10 @@ async def test_success_uses_two_attachments_and_computes_only_application_score(
         assert base64.b64decode(request.attachments[0].data) == b"target-image"
         assert base64.b64decode(request.attachments[1].data) == b"generated-image"
         assert request.authorize_confirmation is False
+        assert request.allowed_tool_names == ()
+        assert request.max_tool_starts == 0
+        assert request.max_jsonl_records == 4096
+        assert request.max_evidence_records == 64
         return rpc_result(assistant_text=evaluation_text())
 
     pipeline, store = make_pipeline(tmp_path, challenge, rpc)

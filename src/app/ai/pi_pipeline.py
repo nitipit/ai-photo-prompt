@@ -60,6 +60,8 @@ RPCRunner = Callable[[PiRPCRequest], Awaitable[PiRPCResult]]
 
 _MAX_FEEDBACK_LENGTH = 240
 _MAX_RPC_TIMEOUT = 24 * 60 * 60
+_MAX_RPC_JSONL_RECORDS = 4096
+_MAX_RPC_EVIDENCE_RECORDS = 64
 _PROVIDER = "pi"
 
 _FAILURES: dict[str, tuple[str, str]] = {
@@ -219,6 +221,10 @@ class PiAIPipeline:
             max_stdout_bytes=self._max_stdout_bytes,
             max_stderr_bytes=self._max_stderr_bytes,
             authorize_confirmation=True,
+            allowed_tool_names=("codex_imagegen",),
+            max_tool_starts=1,
+            max_jsonl_records=_MAX_RPC_JSONL_RECORDS,
+            max_evidence_records=_MAX_RPC_EVIDENCE_RECORDS,
         )
 
     def _evaluator_request(
@@ -292,6 +298,10 @@ class PiAIPipeline:
             max_stderr_bytes=self._max_stderr_bytes,
             attachments=attachments,
             authorize_confirmation=False,
+            allowed_tool_names=(),
+            max_tool_starts=0,
+            max_jsonl_records=_MAX_RPC_JSONL_RECORDS,
+            max_evidence_records=_MAX_RPC_EVIDENCE_RECORDS,
         )
 
     async def _call_rpc(self, request: PiRPCRequest, deadline: float) -> PiRPCResult:
@@ -307,6 +317,10 @@ class PiAIPipeline:
             max_stderr_bytes=request.max_stderr_bytes,
             attachments=request.attachments,
             authorize_confirmation=request.authorize_confirmation,
+            allowed_tool_names=request.allowed_tool_names,
+            max_tool_starts=request.max_tool_starts,
+            max_jsonl_records=request.max_jsonl_records,
+            max_evidence_records=request.max_evidence_records,
         )
         try:
             result = await asyncio.wait_for(self._rpc_runner(request), timeout=remaining)

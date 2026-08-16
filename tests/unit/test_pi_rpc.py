@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+import app.ai.pi_rpc as pi_rpc
 from app.ai.pi_rpc import (
     PiImageAttachment,
     PiRPCError,
@@ -65,6 +66,8 @@ def complete(text="assistant prose", duplicate=False):
         "type": "message_end",
         "message": {"role": "assistant", "content": [{"type": "text", "text": text}]},
     })
+    emit({"type": "turn_end"})
+    emit({"type": "agent_end", "messages": [], "willRetry": False})
     emit({"type": "agent_settled"})
 
 
@@ -106,6 +109,45 @@ elif mode == "duplicate-start":
     prompt_response()
     emit({"type": "tool_execution_start", "toolCallId": "call-1", "toolName": "codex_imagegen"})
     emit({"type": "tool_execution_start", "toolCallId": "call-1", "toolName": "codex_imagegen"})
+elif mode == "second-start-before-end":
+    prompt_response()
+    if marker is not None:
+        subprocess.Popen([
+            sys.executable,
+            "-c",
+            "import pathlib as p,sys,time;time.sleep(.3);p.Path(sys.argv[1]).write_text('alive')",
+            str(marker),
+        ])
+    emit({"type": "tool_execution_start", "toolCallId": "call-1", "toolName": "codex_imagegen"})
+    emit({"type": "tool_execution_start", "toolCallId": "call-2", "toolName": "codex_imagegen"})
+    time.sleep(30)
+elif mode == "second-start-after-end":
+    prompt_response()
+    if marker is not None:
+        subprocess.Popen([
+            sys.executable,
+            "-c",
+            "import pathlib as p,sys,time;time.sleep(.3);p.Path(sys.argv[1]).write_text('alive')",
+            str(marker),
+        ])
+    emit({"type": "tool_execution_start", "toolCallId": "call-1", "toolName": "codex_imagegen"})
+    emit({
+        "type": "tool_execution_end",
+        "toolCallId": "call-1",
+        "toolName": "codex_imagegen",
+        "isError": False,
+        "result": {"details": {"outputPath": "generated/authoritative.png", "status": "completed"}},
+    })
+    emit({"type": "tool_execution_start", "toolCallId": "call-2", "toolName": "codex_imagegen"})
+    time.sleep(30)
+elif mode == "open-tool-settled":
+    prompt_response()
+    emit({"type": "tool_execution_start", "toolCallId": "call-1", "toolName": "codex_imagegen"})
+    emit({"type": "agent_end", "messages": [], "willRetry": False})
+    emit({"type": "agent_settled"})
+elif mode == "settled-no-agent-end":
+    prompt_response()
+    emit({"type": "agent_settled"})
 elif mode == "update-name-mismatch":
     prompt_response()
     emit({"type": "tool_execution_start", "toolCallId": "call-1", "toolName": "codex_imagegen"})
@@ -158,8 +200,28 @@ elif mode == "unexpected-confirm":
     })
 elif mode == "late-confirm":
     prompt_response()
+    emit({"type": "agent_end", "messages": [], "willRetry": False})
     emit({"type": "agent_settled"})
     emit({"type": "extension_ui_request", "id": "late-1", "method": "confirm"})
+elif mode == "dense-records":
+    prompt_response()
+    for _ in range(1000):
+        emit({})
+    emit({"type": "agent_end", "messages": [], "willRetry": False})
+    emit({"type": "agent_settled"})
+elif mode == "valid-220":
+    prompt_response()
+    emit({"type": "agent_start"})
+    emit({"type": "turn_start"})
+    for _ in range(220):
+        emit({"type": "message_update"})
+    emit({
+        "type": "message_end",
+        "message": {"role": "assistant", "content": [{"type": "text", "text": "done"}]},
+    })
+    emit({"type": "turn_end"})
+    emit({"type": "agent_end", "messages": [{"large": "payload"}], "willRetry": False})
+    emit({"type": "agent_settled"})
 elif mode == "stdout-limit":
     sys.stdout.buffer.write(b"x" * 4096)
     sys.stdout.buffer.flush()
@@ -196,6 +258,10 @@ def request_for(
     max_stderr_bytes: int = 64 * 1024,
     attachments: tuple[PiImageAttachment, ...] = (),
     authorize_confirmation: bool = False,
+    allowed_tool_names: tuple[str, ...] = ("codex_imagegen",),
+    max_tool_starts: int = 1,
+    max_jsonl_records: int = 4096,
+    max_evidence_records: int = 64,
     marker: Path | None = None,
 ) -> PiRPCRequest:
     argv = [sys.executable, str(fake_child), mode]
@@ -210,6 +276,10 @@ def request_for(
         max_stderr_bytes=max_stderr_bytes,
         attachments=attachments,
         authorize_confirmation=authorize_confirmation,
+        allowed_tool_names=allowed_tool_names,
+        max_tool_starts=max_tool_starts,
+        max_jsonl_records=max_jsonl_records,
+        max_evidence_records=max_evidence_records,
     )
 
 
@@ -293,6 +363,135 @@ async def test_tool_lifecycle_is_correlated_to_unique_starts(
         await run_pi_rpc(request_for(fake_child, mode))
 
     assert raised.value.code == code
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["second-start-before-end", "second-start-after-end"])
+async def test_second_unique_start_is_rejected_and_process_group_stops(
+    fake_child: Path,
+    tmp_path: Path,
+    mode: str,
+) -> None:
+    marker = tmp_path / f"{mode}.txt"
+    with pytest.raises(PiRPCProtocolError) as raised:
+        await run_pi_rpc(request_for(fake_child, mode, marker=marker))
+
+    assert raised.value.code == "tool_start_limit"
+    await asyncio.sleep(0.45)
+    assert not marker.exists()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("mode", "code"),
+    [
+        ("open-tool-settled", "tool_incomplete"),
+        ("settled-no-agent-end", "agent_end_missing"),
+    ],
+)
+async def test_settlement_requires_completed_tools_and_agent_run(
+    fake_child: Path,
+    mode: str,
+    code: str,
+) -> None:
+    with pytest.raises(PiRPCProtocolError) as raised:
+        await run_pi_rpc(request_for(fake_child, mode))
+
+    assert raised.value.code == code
+
+
+@pytest.mark.asyncio
+async def test_tool_free_request_rejects_evaluator_tool_at_start(fake_child: Path) -> None:
+    with pytest.raises(PiRPCProtocolError) as raised:
+        await run_pi_rpc(
+            request_for(
+                fake_child,
+                "success",
+                allowed_tool_names=(),
+                max_tool_starts=0,
+            )
+        )
+
+    assert raised.value.code == "unexpected_tool"
+
+
+@pytest.mark.asyncio
+async def test_dense_record_stream_fails_at_record_bound(fake_child: Path) -> None:
+    with pytest.raises(PiRPCProtocolError) as raised:
+        await run_pi_rpc(
+            request_for(
+                fake_child,
+                "dense-records",
+                max_jsonl_records=16,
+                max_evidence_records=8,
+            )
+        )
+
+    assert raised.value.code == "record_limit"
+
+
+@pytest.mark.asyncio
+async def test_protocol_evidence_fails_at_record_bound(fake_child: Path) -> None:
+    with pytest.raises(PiRPCProtocolError) as raised:
+        await run_pi_rpc(
+            request_for(
+                fake_child,
+                "success",
+                max_jsonl_records=64,
+                max_evidence_records=3,
+            )
+        )
+
+    assert raised.value.code == "evidence_limit"
+
+
+@pytest.mark.asyncio
+async def test_valid_220_record_sequence_retains_only_bounded_evidence(
+    fake_child: Path,
+) -> None:
+    result = await run_pi_rpc(
+        request_for(
+            fake_child,
+            "valid-220",
+            max_jsonl_records=256,
+            max_evidence_records=8,
+            allowed_tool_names=(),
+            max_tool_starts=0,
+        )
+    )
+
+    assert result.assistant_text == "done"
+    assert result.events == (
+        result.prompt_response,
+        {"type": "agent_end"},
+        {"type": "agent_settled"},
+    )
+    assert all(event["type"] != "message_update" for event in result.events)
+
+
+@pytest.mark.asyncio
+async def test_stdout_reader_applies_bounded_queue_backpressure() -> None:
+    stream = asyncio.StreamReader()
+    stream.feed_data(b'{"type":"message_update"}\n' * 8)
+    stream.feed_eof()
+    queue: asyncio.Queue[pi_rpc._QueueItem] = asyncio.Queue(maxsize=2)
+    capture = pi_rpc._ByteCapture(4096)
+    reader = asyncio.create_task(pi_rpc._read_stdout(stream, queue, capture, 16))
+
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+    assert queue.qsize() == 2
+    assert not reader.done()
+
+    items: list[pi_rpc._QueueItem] = []
+    while not reader.done():
+        items.append(await asyncio.wait_for(queue.get(), timeout=1))
+        await asyncio.sleep(0)
+    items.extend(queue.get_nowait() for _ in range(queue.qsize()))
+    await reader
+
+    assert sum(isinstance(item, pi_rpc._Record) for item in items) == 8
+    assert any(isinstance(item, pi_rpc._StreamEnd) for item in items)
 
 
 @pytest.mark.asyncio
@@ -388,6 +587,8 @@ async def test_cancellation_reraises_and_kills_descendant_process(
     )
     await asyncio.sleep(0.15)
     task.cancel()
+    await asyncio.sleep(0)
+    task.cancel()
 
     with pytest.raises(asyncio.CancelledError):
         await task
@@ -434,4 +635,33 @@ def test_request_validation_is_explicit(value: type[PiRPCRequest], error: type[E
             timeout=1,
             max_stdout_bytes=1,
             max_stderr_bytes=1,
+        )
+
+
+@pytest.mark.parametrize(
+    ("allowed_tool_names", "max_tool_starts", "max_records", "max_evidence"),
+    [
+        ((), 1, 8, 4),
+        (("codex_imagegen",), 0, 8, 4),
+        (("codex_imagegen", "codex_imagegen"), 1, 8, 4),
+        ((), 0, 0, 1),
+        ((), 0, 8, 0),
+        ((), 0, 8, 9),
+    ],
+)
+def test_request_tool_and_record_bounds_are_validated(
+    fake_child: Path,
+    allowed_tool_names: tuple[str, ...],
+    max_tool_starts: int,
+    max_records: int,
+    max_evidence: int,
+) -> None:
+    with pytest.raises(ValueError):
+        request_for(
+            fake_child,
+            "success",
+            allowed_tool_names=allowed_tool_names,
+            max_tool_starts=max_tool_starts,
+            max_jsonl_records=max_records,
+            max_evidence_records=max_evidence,
         )
