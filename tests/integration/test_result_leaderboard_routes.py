@@ -366,6 +366,93 @@ def test_leaderboard_route_renders_only_completed_current_level_projection(runti
         assert 'data-ranking="competition-rank"' in leaderboard.text
 
 
+def test_public_leaderboard_is_direct_persistent_and_level_filtered(runtime_app) -> None:
+    with TestClient(runtime_app) as client:
+        ready = client.get("/")
+        assert ready.status_code == 200
+        assert 'href="/leaderboard"' in ready.text
+
+        empty = client.get("/leaderboard")
+        assert empty.status_code == 200
+        assert 'data-leaderboard-mode="public"' in empty.text
+        assert 'data-leaderboard-level="p1-p3"' in empty.text
+        assert 'data-leaderboard-empty="true"' in empty.text
+        assert "leaderboard.js" not in empty.text
+        assert "data-leaderboard-countdown" not in empty.text
+
+        round_id = _start_generated(client, display_name="Current")
+        generated = _stored_record(runtime_app, round_id)
+        assert generated.reveal_deadline is not None
+        _set_clock_at(runtime_app, generated.reveal_deadline)
+        assert (
+            client.post(
+                f"/rounds/{round_id}/generating/continue",
+                follow_redirects=False,
+            ).status_code
+            == 303
+        )
+        assert (
+            client.post(
+                f"/rounds/{round_id}/result/leaderboard",
+                follow_redirects=False,
+            ).status_code
+            == 303
+        )
+        current = _stored_record(runtime_app, round_id)
+        repository = runtime_app.state.round_repository
+        scores = (100, 92, 92, 80, 70)
+        for index, score in enumerate(scores, start=1):
+            repository.create(
+                _completed_copy(
+                    current,
+                    name=f"Top {index}",
+                    score=score,
+                    prompt=f"public prompt {index}",
+                    image_url=f"/generated/public-{index}.webp",
+                    completed_at=f"2026-01-01T00:00:{index:02d}+00:00",
+                )
+            )
+        repository.create(
+            _completed_copy(
+                current,
+                name="Other level",
+                score=99,
+                prompt="other level public prompt",
+                image_url="/generated/other-public.webp",
+                level=LevelGroup.P4_P6,
+            )
+        )
+        assert current.leaderboard_deadline is not None
+        expired = datetime.fromisoformat(current.leaderboard_deadline) + timedelta(minutes=5)
+        _set_clock_at(runtime_app, expired.isoformat())
+
+        leaderboard = client.get("/leaderboard?level=p1-p3")
+
+        assert leaderboard.status_code == 200
+        assert 'data-leaderboard-data="public-level-projection"' in leaderboard.text
+        assert leaderboard.text.count('data-leaderboard-entry="public-level-projection"') == 4
+        assert [f"Top {index}" in leaderboard.text for index in range(1, 5)] == [
+            True,
+            True,
+            True,
+            True,
+        ]
+        assert "Top 5" not in leaderboard.text
+        assert "Other level" not in leaderboard.text
+        assert 'data-entry-rank="1"' in leaderboard.text
+        assert leaderboard.text.count('data-entry-rank="2"') == 2
+        assert 'data-entry-rank="4"' in leaderboard.text
+        assert 'aria-current="page"' in leaderboard.text
+        assert "leaderboard.js" not in leaderboard.text
+        assert "data-leaderboard-countdown" not in leaderboard.text
+
+        other_level = client.get("/leaderboard?level=p4-p6")
+        assert other_level.status_code == 200
+        assert "Other level" in other_level.text
+        assert "Top 1" not in other_level.text
+        assert client.get("/leaderboard?level=invalid").status_code == 422
+
+
 def test_leaderboard_frontend_contract_is_single_screen_without_list_clipping() -> None:
     base_template = Path(__file__).parents[2] / "src/app/templates/_base.html"
     leaderboard_template = Path(__file__).parents[2] / "src/app/templates/leaderboard.html"
@@ -387,7 +474,8 @@ def test_leaderboard_frontend_contract_is_single_screen_without_list_clipping() 
     assert "grid-template-rows: repeat(4" in list_rule
     assert "overflow" not in list_rule
     assert 'data-leaderboard-deadline="{{ leaderboard_deadline }}"' in leaderboard_source
-    assert 'data-leaderboard-list="completed-round-projection"' in leaderboard_source
+    assert "public-level-projection" in leaderboard_source
+    assert "data-leaderboard-countdown" in leaderboard_source
 
 
 def test_result_and_leaderboard_routes_map_missing_and_stale_rounds(runtime_app) -> None:

@@ -269,6 +269,38 @@ async def test_leaderboard_projects_current_level_competition_rank_and_full_fiel
 
 
 @pytest.mark.asyncio
+async def test_public_leaderboard_returns_top_four_for_selected_level(setup) -> None:
+    repository, claims, clock = setup
+    service = service_for(repository, claims, clock)
+    scores = (100, 92, 92, 80, 70)
+    rows = [
+        make_completed(
+            round_id=f"00000000-0000-0000-0000-{index:012d}",
+            score=score,
+            name=f"Player {index}",
+        )
+        for index, score in enumerate(scores, start=1)
+    ]
+    rows.append(
+        make_completed(
+            round_id="00000000-0000-0000-0000-000000000006",
+            level=LevelGroup.P4_P6,
+            score=100,
+            name="Other level",
+        )
+    )
+    for row in rows:
+        repository.create(row)
+
+    entries = await service.get_public_leaderboard(LevelGroup.P1_P3)
+
+    assert [entry.score for entry in entries] == [100, 92, 92, 80]
+    assert [entry.rank for entry in entries] == [1, 2, 2, 4]
+    assert all(entry.is_current is False for entry in entries)
+    assert all(entry.name != "Other level" for entry in entries)
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("current_index", "expected_indexes"),
     (

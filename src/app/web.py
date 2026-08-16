@@ -15,6 +15,14 @@ from .domain.models import (
 templates = Jinja2Templates(directory=TEMPLATE_DIR)
 templates.env.auto_reload = True
 
+_LEVEL_OPTIONS = (
+    ("p1-p3", "ป.1 – ป.3"),
+    ("p4-p6", "ป.4 – ป.6"),
+    ("m1-m3", "ม.1 – ม.3"),
+    ("m4-m6", "ม.4 – ม.6"),
+)
+_LEVEL_LABELS = dict(_LEVEL_OPTIONS)
+
 
 def render_ready(request: Request):
     """Render the attract screen for the next player."""
@@ -54,6 +62,24 @@ def render_leaderboard(
             "current_rank": current_rank,
             "rows": rows,
             "leaderboard_deadline": leaderboard_deadline,
+            "level_label": _LEVEL_LABELS[level],
+            "view_mode": "round",
+        },
+    )
+
+
+def render_public_leaderboard(request: Request, *, level: str, rows):
+    """Render a persistent Top 4 leaderboard for the selected level."""
+
+    return templates.TemplateResponse(
+        request=request,
+        name="leaderboard.html",
+        context={
+            "level": level,
+            "level_label": _LEVEL_LABELS[level],
+            "level_options": _LEVEL_OPTIONS,
+            "rows": rows,
+            "view_mode": "public",
         },
     )
 

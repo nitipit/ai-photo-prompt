@@ -30,11 +30,16 @@
             autocomplete="nickname"
           />
         </label>
-        <kiosk-button>
-          <button id="start-button" type="submit">
-            เริ่มเล่น <span aria-hidden="true">→</span>
-          </button>
-        </kiosk-button>
+        <div class="ready-actions">
+          <kiosk-button>
+            <button id="start-button" type="submit">
+              เริ่มเล่น <span aria-hidden="true">→</span>
+            </button>
+          </kiosk-button>
+          <a class="ready-leaderboard-link" href="/leaderboard">
+            ดูอันดับ <span aria-hidden="true">↗</span>
+          </a>
+        </div>
       </form>
       <p class="ready-hint">
         <span aria-hidden="true">●</span> เล่นทีละ 1 คน · ใช้เวลาประมาณ 3 นาที

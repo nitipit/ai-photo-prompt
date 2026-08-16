@@ -176,7 +176,9 @@ not change persistence.
 
 - Prompt countdown: 90 seconds for every level.
 - Generated-image reveal: 5 seconds.
-- Leaderboard display: 15 seconds, then navigate to Ready.
+- Post-round leaderboard display: 15 seconds, then navigate to Ready. The
+  read-only leaderboard opened from Ready has no deadline and remains until the
+  visitor navigates back.
 - Challenge: independently random from the five approved challenges in the
   selected level. The selector is injected so tests are deterministic.
 - Display name: trim surrounding whitespace, empty becomes `นิรนาม`, maximum 30
@@ -334,11 +336,14 @@ an unbounded provider queue.
 ## Leaderboard Contract
 
 Leaderboard entries include rank, name, score, generated image, and full prompt
-and are filtered to the current level group.
+and are filtered to the selected level group.
 
-Equal scores share the same competition rank, for example `1, 2, 2, 4`. The
-current round's rank and row are highlighted prominently. Generation latency and
-prompt completion time never break ties.
+Equal scores share the same competition rank, for example `1, 2, 2, 4`.
+Generation latency and prompt completion time never break ties. The post-round
+view emits at most four rows while preserving the current round and its global
+rank. The read-only public view emits the Top 4 for the selected level, has no
+current-player highlight, and can be opened directly from Ready without creating
+or completing a round.
 
 ## Route and HTML-First Contract
 
@@ -348,6 +353,8 @@ rounds return `404`, malformed input `422`, and stale or invalid events `409`.
 Required flow boundaries:
 
 - `GET /` renders Ready.
+- `GET /leaderboard` renders the persistent read-only Top 4 for a validated
+  level query.
 - `POST /rounds` creates a fresh round and redirects to level selection.
 - Round-scoped GET/POST routes handle level, challenge, prompt, generating,
   result, and leaderboard scenes.

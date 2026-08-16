@@ -8,9 +8,10 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Annotated
 from uuid import uuid4
 
-from fastapi import FastAPI, Form, HTTPException, Request
+from fastapi import FastAPI, Form, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from shelfdb.shelf import DB  # type: ignore[import-untyped]
@@ -40,6 +41,7 @@ from .domain.models import (
     ChallengeSpec,
     GameState,
     GenerationStatusState,
+    LevelGroup,
     PromptSubmissionReason,
 )
 from .persistence import (
@@ -64,6 +66,7 @@ from .web import (
     render_leaderboard,
     render_level_selection,
     render_prompt_entry,
+    render_public_leaderboard,
     render_ready,
     render_result,
 )
@@ -588,6 +591,24 @@ async def result_scene(request: Request, round_id: str):
         generated_artifact=record.generated_artifact,
         score=record.score,
         feedback=feedback,
+    )
+
+
+@app.get("/leaderboard", response_class=HTMLResponse)
+async def public_leaderboard_scene(
+    request: Request,
+    level: Annotated[LevelGroup, Query()] = LevelGroup.P1_P3,
+):
+    """Render a persistent Top 4 leaderboard for one selected level."""
+
+    try:
+        rows = await request.app.state.game_round_service.get_public_leaderboard(level)
+    except GameRoundValidationError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    return render_public_leaderboard(
+        request,
+        level=level.value,
+        rows=rows,
     )
 
 

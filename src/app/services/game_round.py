@@ -562,20 +562,49 @@ class GameRoundService:
             raise GameRoundValidationError("completed round is missing level")
         self._validate_completed_row(current, current.level)
 
-        try:
-            completed = await asyncio.to_thread(
-                self._repository.list_completed,
-                current.level,
-            )
-        except ValueError as error:
-            raise GameRoundValidationError("stored leaderboard row is invalid") from error
-        rows = [self._validate_completed_row(row, current.level) for row in completed]
-        current_rows = [row for row in rows if row.id == current.id]
-        if len(current_rows) != 1:
+        entries = await self._ranked_leaderboard_entries(
+            current.level,
+            current_round_id=current.id,
+        )
+        current_indexes = [
+            index for index, entry in enumerate(entries) if entry.round_id == current.id
+        ]
+        if len(current_indexes) != 1:
             raise GameRoundValidationError(
                 "current completed round must appear exactly once in leaderboard"
             )
+        current_index = current_indexes[0]
+        visible_entries = self._leaderboard_window(entries, current_index)
+        return LeaderboardProjection(
+            visible_entries,
+            entries[current_index].rank,
+        )
 
+    async def get_public_leaderboard(
+        self,
+        level: LevelGroup,
+    ) -> tuple[LeaderboardEntry, ...]:
+        """Return the four highest-ranked completed rounds for one level."""
+
+        if not isinstance(level, LevelGroup):
+            raise GameRoundValidationError("leaderboard level is invalid")
+        entries = await self._ranked_leaderboard_entries(level)
+        return tuple(entries[:_MAX_LEADERBOARD_ROWS])
+
+    async def _ranked_leaderboard_entries(
+        self,
+        level: LevelGroup,
+        *,
+        current_round_id: str | None = None,
+    ) -> list[LeaderboardEntry]:
+        try:
+            completed = await asyncio.to_thread(
+                self._repository.list_completed,
+                level,
+            )
+        except ValueError as error:
+            raise GameRoundValidationError("stored leaderboard row is invalid") from error
+        rows = [self._validate_completed_row(row, level) for row in completed]
         ordered = sorted(
             rows,
             key=lambda row: (
@@ -585,8 +614,6 @@ class GameRoundService:
             ),
         )
         entries: list[LeaderboardEntry] = []
-        current_rank: int | None = None
-        current_index: int | None = None
         previous_rank = 0
         previous_score: int | float | None = None
         for index, row in enumerate(ordered):
@@ -594,28 +621,20 @@ class GameRoundService:
                 raise GameRoundValidationError("completed leaderboard row is incomplete")
             score = self._visible_score(row)
             rank = 1 if index == 0 else previous_rank if score == previous_score else index + 1
-            entry = LeaderboardEntry(
-                round_id=row.id,
-                is_current=row.id == current.id,
-                rank=rank,
-                name=row.display_name,
-                score=score,
-                generated_image=row.generated_artifact,
-                prompt=row.prompt,
+            entries.append(
+                LeaderboardEntry(
+                    round_id=row.id,
+                    is_current=row.id == current_round_id,
+                    rank=rank,
+                    name=row.display_name,
+                    score=score,
+                    generated_image=row.generated_artifact,
+                    prompt=row.prompt,
+                )
             )
-            entries.append(entry)
-            if row.id == current.id:
-                current_rank = rank
-                current_index = index
             previous_rank = rank
             previous_score = score
-
-        if current_rank is None or current_index is None:
-            raise GameRoundValidationError(
-                "current completed round must appear exactly once in leaderboard"
-            )
-        visible_entries = self._leaderboard_window(entries, current_index)
-        return LeaderboardProjection(visible_entries, current_rank)
+        return entries
 
     async def _run_claimed_pipeline(
         self,

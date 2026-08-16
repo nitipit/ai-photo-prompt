@@ -3,8 +3,9 @@
 <main
   class="scene leaderboard-scene"
   data-scene="leaderboard"
-  data-leaderboard-data="completed-round-projection"
+  data-leaderboard-data="{{ 'public-level-projection' if view_mode == 'public' else 'completed-round-projection' }}"
   data-leaderboard-level="{{ level }}"
+  data-leaderboard-mode="{{ view_mode }}"
   data-current-round="{{ round_id }}"
   data-leaderboard-deadline="{{ leaderboard_deadline }}"
 >
@@ -13,17 +14,31 @@
       <span class="brand-mark" aria-hidden="true">✦</span>
       <span class="brand-name">PHOTO <strong>PROMPT</strong></span>
     </a>
-    <p class="scene-tag">อันดับ · ระดับ {{ level }}</p>
+    <p class="scene-tag">อันดับ · {{ level_label }}</p>
   </header>
 
-  <div class="leaderboard-layout">
+  <div
+    class="leaderboard-layout{% if view_mode == 'public' %} leaderboard-layout-public{% endif %}"
+  >
     <section class="leaderboard-heading" aria-labelledby="leaderboard-title">
-      <p class="eyebrow">ระดับ {{ level }}</p>
+      <p class="eyebrow">ระดับ {{ level_label }}</p>
       <h1 id="leaderboard-title">
         อันดับคะแนน<br /><span>Leaderboard</span>
       </h1>
     </section>
 
+    {% if view_mode == "public" %}
+    <nav class="leaderboard-levels" aria-label="เลือกช่วงชั้น">
+      {% for option_value, option_label in level_options %}
+      <a
+        class="leaderboard-level-link{% if option_value == level %} leaderboard-level-link-active{% endif %}"
+        href="/leaderboard?level={{ option_value }}"
+        data-level-option="{{ option_value }}"
+        aria-current="{{ 'page' if option_value == level else 'false' }}"
+      >{{ option_label }}</a>
+      {% endfor %}
+    </nav>
+    {% else %}
     <section
       class="leaderboard-current"
       aria-label="อันดับของรอบนี้"
@@ -44,17 +59,18 @@
         คะแนน {{ score }} / 100
       </p>
     </section>
+    {% endif %}
 
     <ol
       class="leaderboard-list"
-      aria-label="ตารางอันดับระดับ {{ level }}"
-      data-leaderboard-list="completed-round-projection"
+      aria-label="ตารางอันดับระดับ {{ level_label }}"
+      data-leaderboard-list="{{ 'public-level-projection' if view_mode == 'public' else 'completed-round-projection' }}"
       data-ranking="competition-rank"
     >
       {% for entry in rows %}
       <li
         class="leaderboard-row{% if entry.is_current %} leaderboard-row-current{% endif %}"
-        data-leaderboard-entry="completed-round-projection"
+        data-leaderboard-entry="{{ 'public-level-projection' if view_mode == 'public' else 'completed-round-projection' }}"
         data-current-entry="{{ 'true' if entry.is_current else 'false' }}"
         data-entry-source="completed-round-record"
       >
@@ -84,20 +100,30 @@
           <span>/ 100</span>
         </div>
       </li>
+      {% else %}
+      <li class="leaderboard-empty" data-leaderboard-empty="true">
+        <span aria-hidden="true">✦</span>
+        <strong>ยังไม่มีคะแนนในช่วงชั้นนี้</strong>
+        <small>มาเป็นคนแรกบนกระดานกันเลย</small>
+      </li>
       {% endfor %}
     </ol>
 
     <div
       class="leaderboard-bottom-action"
       data-action-region="ready"
-      data-action-source="completed-round-record"
+      data-action-source="{{ 'public-navigation' if view_mode == 'public' else 'completed-round-record' }}"
     >
+      {% if view_mode == "public" %}
+      <p>เลือกช่วงชั้นด้านบนเพื่อดูอันดับอื่น ๆ</p>
+      {% else %}
       <p>
         กลับหน้าพร้อมเล่นใน
         <strong class="leaderboard-countdown" data-leaderboard-countdown
         >—</strong>
         วินาที
       </p>
+      {% endif %}
       <a
         id="ready-fallback-link"
         class="leaderboard-ready-link"
@@ -109,6 +135,6 @@
     </div>
   </div>
 </main>
-{% endblock %} {% block page_script %}
+{% endblock %} {% block page_script %} {% if view_mode == "round" %}
 <script type="module" src="/templates/leaderboard.js"></script>
-{% endblock %}
+{% endif %} {% endblock %}

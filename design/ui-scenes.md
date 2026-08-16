@@ -41,7 +41,8 @@ Ready
 ### 1. Ready
 
 A separate attract screen for the next player. It invites the player to start
-and does not ask for setup information yet.
+and offers a secondary `ดูอันดับ` action that opens the read-only leaderboard
+without creating or completing a round.
 
 ### 2. Level Selection
 
@@ -82,10 +83,13 @@ There is no separate Round Complete scene.
 
 ### 7. Leaderboard
 
-The leaderboard shows only players in the current school-level group. Each
+The leaderboard shows only players in the selected school-level group. Each
 entry includes the rank, name, score, generated image, and full prompt text.
 
-After the leaderboard moment, the game returns to Ready for the next player.
+The post-round leaderboard highlights the current player and returns to Ready
+after 15 seconds. The read-only leaderboard opened from Ready shows the Top 4,
+lets the visitor switch among all four level groups, and remains visible until
+the visitor chooses to return.
 
 Result / Feedback and Leaderboard remain separate scenes.
 
