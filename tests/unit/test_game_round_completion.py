@@ -61,7 +61,16 @@ def setup(tmp_path: Path):
     db = DB(str(tmp_path / "completion"))
     try:
         repository = ShelfDbRoundRepository(db)
-        yield repository, ShelfDbGenerationClaims(db), MutableClock()
+        clock = MutableClock()
+        yield (
+            repository,
+            ShelfDbGenerationClaims(
+                db,
+                clock,
+                timedelta(seconds=30),
+            ),
+            clock,
+        )
     finally:
         db.close()
 

@@ -97,7 +97,14 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
         runtime_catalog = ChallengeCatalog.from_repository(challenge_repository)
         runtime_catalog.all()
         round_repository = ShelfDbRoundRepository(db)
-        generation_claims = ShelfDbGenerationClaims(db)
+        claim_lease_duration = timedelta(
+            seconds=float(getattr(application.state, "claim_lease_seconds", 30.0))
+        )
+        generation_claims = ShelfDbGenerationClaims(
+            db,
+            _utc_now,
+            claim_lease_duration,
+        )
         game_round_service = GameRoundService(
             round_repository,
             runtime_catalog,
@@ -106,9 +113,7 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
             generation_claims=generation_claims,
             pipeline=pipeline,
             owner_instance=str(uuid4()),
-            claim_lease_duration=timedelta(
-                seconds=float(getattr(application.state, "claim_lease_seconds", 30.0))
-            ),
+            claim_lease_duration=claim_lease_duration,
             claim_heartbeat_interval=timedelta(
                 seconds=float(getattr(application.state, "claim_heartbeat_seconds", 5.0))
             ),

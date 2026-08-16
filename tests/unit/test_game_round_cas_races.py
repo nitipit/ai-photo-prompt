@@ -88,8 +88,9 @@ def setup(tmp_path: Path):
     db = DB(str(tmp_path / "cas-races"))
     try:
         repository = ShelfDbRoundRepository(db)
-        claims = ShelfDbGenerationClaims(db)
-        yield repository, claims, MutableClock()
+        clock = MutableClock()
+        claims = ShelfDbGenerationClaims(db, clock, timedelta(seconds=30))
+        yield repository, claims, clock
     finally:
         db.close()
 

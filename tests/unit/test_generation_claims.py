@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from threading import Barrier
 from uuid import uuid4
@@ -65,9 +65,93 @@ def persistence(tmp_path: Path):
     db = DB(str(tmp_path / "claims-db"))
     try:
         rounds = ShelfDbRoundRepository(db)
-        yield ShelfDbGenerationClaims(db), rounds
+        yield (
+            ShelfDbGenerationClaims(
+                db,
+                lambda: datetime.fromisoformat(NOW),
+                timedelta(seconds=30),
+            ),
+            rounds,
+        )
     finally:
         db.close()
+
+
+def test_fresh_acquisition_starts_full_lease_at_transaction_time(persistence) -> None:
+    claims, rounds = persistence
+    record = make_round()
+    rounds.create(record)
+
+    acquired = claims.acquire_fresh(
+        record.id,
+        "attempt-1",
+        "worker-1",
+        CLAIMED_AT,
+    )
+
+    assert acquired.claimed_at == NOW
+    assert (
+        acquired.lease_expires_at
+        == datetime(
+            2026,
+            1,
+            1,
+            0,
+            0,
+            40,
+            tzinfo=UTC,
+        ).isoformat()
+    )
+    assert claims.get(record.id).dict() == acquired.dict()
+
+
+def test_fresh_acquisition_rejects_exact_request_expiry(persistence) -> None:
+    claims, rounds = persistence
+    record = make_round()
+    rounds.create(record)
+    fresh_claims = ShelfDbGenerationClaims(
+        claims._db,  # noqa: SLF001
+        lambda: datetime.fromisoformat(NOW),
+        timedelta(seconds=10),
+    )
+
+    with pytest.raises(StaleAttemptTokenError):
+        fresh_claims.acquire_fresh(
+            record.id,
+            "attempt-1",
+            "worker-1",
+            CLAIMED_AT,
+        )
+
+    assert claims.get(record.id) is None
+
+
+@pytest.mark.parametrize("operation", ["renew", "release", "finalize"])
+def test_fresh_live_operations_reject_exact_claim_expiry(
+    persistence,
+    operation: str,
+) -> None:
+    claims, rounds = persistence
+    record = make_round()
+    existing = make_claim(lease_expires_at=NOW)
+    rounds.create(record)
+    claims.claim(record.id, existing, CLAIMED_AT)
+
+    with pytest.raises(StaleAttemptTokenError):
+        if operation == "renew":
+            claims.renew_fresh(record.id, existing.attempt_token)
+        elif operation == "release":
+            claims.release_fresh(record.id, existing.attempt_token)
+        else:
+            replacement = RoundRecord(**{**record.dict(), "state": GameState.GENERATED_REVEAL})
+            claims.replace_round_and_release_fresh(
+                replacement,
+                existing.attempt_token,
+                expected=record,
+            )
+
+    assert rounds.get(record.id).dict() == record.dict()
+    assert claims.get(record.id).dict() == existing.dict()
 
 
 def test_live_claim_is_rejected(persistence) -> None:
@@ -423,7 +507,11 @@ def test_claim_survives_close_and_reopen(tmp_path: Path) -> None:
     first_db = DB(path)
     try:
         rounds = ShelfDbRoundRepository(first_db)
-        claims = ShelfDbGenerationClaims(first_db)
+        claims = ShelfDbGenerationClaims(
+            first_db,
+            lambda: datetime.fromisoformat(NOW),
+            timedelta(seconds=30),
+        )
         rounds.create(record)
         claims.claim(record.id, claim, NOW)
     finally:
@@ -431,7 +519,11 @@ def test_claim_survives_close_and_reopen(tmp_path: Path) -> None:
 
     second_db = DB(path)
     try:
-        rebuilt = ShelfDbGenerationClaims(second_db).get(record.id)
+        rebuilt = ShelfDbGenerationClaims(
+            second_db,
+            lambda: datetime.fromisoformat(NOW),
+            timedelta(seconds=30),
+        ).get(record.id)
     finally:
         second_db.close()
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -33,15 +34,64 @@ class StaleAttemptTokenError(ValueError):
 
 
 class ShelfDbGenerationClaims:
-    """Atomically lease provider attempts against validated round mappings."""
+    """Atomically lease provider attempts against validated round mappings.
 
-    def __init__(self, db: DB) -> None:
+    Production lease operations read the injected clock only after entering the
+    shared ShelfDB write unit.  The caller-time methods remain lower-level helpers
+    for deterministic repository tests and administrative setup.
+    """
+
+    def __init__(
+        self,
+        db: DB,
+        utc_clock: Callable[[], datetime],
+        lease_duration: timedelta,
+    ) -> None:
         self._db = db
+        self._utc_clock = utc_clock
+        self._lease_duration = _validate_lease_duration(lease_duration)
         # ShelfDB rejects overlapping top-level writers on one shared environment.
         self._write_lock = _SHELFDB_WRITE_LOCK
         # Initialize the transient shelf so read-only operations work on an empty DB.
         with self._write_lock, self._db.transaction(write=True) as transaction:
             transaction.shelf(_CLAIMS_SHELF)
+
+    @property
+    def lease_duration(self) -> timedelta:
+        """Return the configured duration used by fresh production operations."""
+
+        return self._lease_duration
+
+    def acquire_fresh(
+        self,
+        round_id: str,
+        attempt_token: str,
+        owner_instance: str,
+        requested_at: str,
+    ) -> AttemptClaim:
+        """Acquire a request-time lease only if it is live at transaction-time.
+
+        ``requested_at`` starts the acquisition budget before executor queuing.
+        The trusted transaction clock rejects a request whose full budget elapsed,
+        then starts the stored lease at transaction-time so an accepted provider
+        always receives the complete configured lease.
+        """
+
+        request_deadline = _parse_utc_timestamp(requested_at, "requested_at") + self._lease_duration
+        with self._write_lock, self._db.transaction(write=True) as transaction:
+            now = self._trusted_utc_now()
+            if request_deadline <= now:
+                raise StaleAttemptTokenError(
+                    f"generation acquisition expired for round: {round_id}"
+                )
+            claim = AttemptClaim(
+                attempt_token=attempt_token,
+                owner_instance=owner_instance,
+                claimed_at=now.isoformat(),
+                lease_expires_at=(now + self._lease_duration).isoformat(),
+            )
+            _claim_in_transaction(transaction, round_id, claim, now)
+        return claim
 
     def claim(self, round_id: str, claim: AttemptClaim, now: str) -> AttemptClaim:
         """Create a claim when ``round_id`` is generating and no live claim exists."""
@@ -59,21 +109,7 @@ class ShelfDbGenerationClaims:
             raise ValueError("lease_expires_at must be after now")
 
         with self._write_lock, self._db.transaction(write=True) as transaction:
-            round_shelf = transaction.shelf(_ROUNDS_SHELF)
-            round_record = _read_round(round_shelf, round_id)
-            _require_generating_round(round_record)
-
-            claim_shelf = transaction.shelf(_CLAIMS_SHELF)
-            existing_payload = _read_payload(claim_shelf, round_id)
-            if existing_payload is not None:
-                existing = _reconstruct_claim(existing_payload, round_id)
-                if _parse_utc_timestamp(existing.lease_expires_at, "lease_expires_at") > now_value:
-                    raise GenerationAlreadyRunningError(
-                        f"generation already running for round: {round_id}"
-                    )
-                claim_shelf.key(round_id).delete()
-
-            claim_shelf.put(round_id, validated_claim.dict())
+            _claim_in_transaction(transaction, round_id, validated_claim, now_value)
         return validated_claim
 
     def get(self, round_id: str) -> AttemptClaim | None:
@@ -119,8 +155,37 @@ class ShelfDbGenerationClaims:
             shelf.put(round_id, renewed.dict())
         return renewed
 
+    def renew_fresh(self, round_id: str, attempt_token: str) -> AttemptClaim:
+        """Extend a matching claim using liveness and expiry from transaction-time."""
+
+        with self._write_lock, self._db.transaction(write=True) as transaction:
+            now = self._trusted_utc_now()
+            shelf = transaction.shelf(_CLAIMS_SHELF)
+            existing = _require_live_matching_claim(shelf, round_id, attempt_token, now)
+            expiry = now + self._lease_duration
+            claimed_at = _parse_utc_timestamp(existing.claimed_at, "claimed_at")
+            if expiry <= claimed_at:
+                raise ValueError("lease_expires_at must be after claimed_at")
+            renewed = AttemptClaim(
+                {
+                    **existing.dict(),
+                    "lease_expires_at": expiry.isoformat(),
+                }
+            )
+            shelf.put(round_id, renewed.dict())
+        return renewed
+
+    def release_fresh(self, round_id: str, attempt_token: str) -> None:
+        """Delete a matching claim only when it is live at transaction-time."""
+
+        with self._write_lock, self._db.transaction(write=True) as transaction:
+            now = self._trusted_utc_now()
+            shelf = transaction.shelf(_CLAIMS_SHELF)
+            _require_live_matching_claim(shelf, round_id, attempt_token, now)
+            shelf.key(round_id).delete()
+
     def release(self, round_id: str, attempt_token: str, now: str) -> None:
-        """Delete only a live claim owned by ``attempt_token``."""
+        """Delete only a live claim owned by ``attempt_token`` using caller-time."""
 
         now_value = _parse_utc_timestamp(now, "now")
         with self._write_lock, self._db.transaction(write=True) as transaction:
@@ -140,6 +205,26 @@ class ShelfDbGenerationClaims:
             _require_matching_claim(shelf, round_id, attempt_token)
             shelf.key(round_id).delete()
 
+    def replace_round_and_release_fresh(
+        self,
+        record: RoundRecord,
+        attempt_token: str,
+        *,
+        expected: RoundRecord | None = None,
+    ) -> None:
+        """Replace a round only for a matching lease live at transaction-time."""
+
+        validated_record, expected_snapshot = _validate_replacement(record, expected)
+        with self._write_lock, self._db.transaction(write=True) as transaction:
+            now = self._trusted_utc_now()
+            _replace_round_and_release_in_transaction(
+                transaction,
+                validated_record,
+                attempt_token,
+                now,
+                expected_snapshot,
+            )
+
     def replace_round_and_release(
         self,
         record: RoundRecord,
@@ -148,35 +233,22 @@ class ShelfDbGenerationClaims:
         *,
         expected: RoundRecord | None = None,
     ) -> None:
-        """Replace a round and delete its matching live claim atomically.
+        """Replace a round using caller-time for lower-level repository tests.
 
-        Production generation paths pass the snapshot read before the provider
-        attempt.  ``expected=None`` is retained for focused repository setup and
+        ``expected=None`` is retained for focused repository setup and
         compatibility with the lower-level claim utility tests.
         """
 
-        validated_record = _validate_record(record)
-        expected_snapshot = _validate_record(expected) if expected is not None else None
-        if expected_snapshot is not None and expected_snapshot.id != validated_record.id:
-            raise RoundSnapshotConflictError(
-                f"round snapshot does not match replacement ID: {validated_record.id}"
-            )
+        validated_record, expected_snapshot = _validate_replacement(record, expected)
         now_value = _parse_utc_timestamp(now, "now")
         with self._write_lock, self._db.transaction(write=True) as transaction:
-            round_shelf = transaction.shelf(_ROUNDS_SHELF)
-            current = _read_round(round_shelf, validated_record.id)
-            if expected_snapshot is not None:
-                _require_expected_snapshot(current, expected_snapshot)
-
-            claim_shelf = transaction.shelf(_CLAIMS_SHELF)
-            _require_live_matching_claim(
-                claim_shelf,
-                validated_record.id,
+            _replace_round_and_release_in_transaction(
+                transaction,
+                validated_record,
                 attempt_token,
                 now_value,
+                expected_snapshot,
             )
-            round_shelf.put(validated_record.id, validated_record.dict())
-            claim_shelf.key(validated_record.id).delete()
 
     def replace_round_and_clear_claim(
         self,
@@ -206,6 +278,74 @@ class ShelfDbGenerationClaims:
             claim_shelf = transaction.shelf(_CLAIMS_SHELF)
             if _read_payload(claim_shelf, validated_record.id) is not None:
                 claim_shelf.key(validated_record.id).delete()
+
+    def _trusted_utc_now(self) -> datetime:
+        current = self._utc_clock()
+        if (
+            not isinstance(current, datetime)
+            or current.tzinfo is None
+            or current.utcoffset() is None
+        ):
+            raise ValueError("UTC clock must return an aware datetime")
+        return current.astimezone(UTC)
+
+
+def _claim_in_transaction(
+    transaction: Any,
+    round_id: str,
+    claim: AttemptClaim,
+    now: datetime,
+) -> None:
+    round_record = _read_round(transaction.shelf(_ROUNDS_SHELF), round_id)
+    _require_generating_round(round_record)
+
+    claim_shelf = transaction.shelf(_CLAIMS_SHELF)
+    existing_payload = _read_payload(claim_shelf, round_id)
+    if existing_payload is not None:
+        existing = _reconstruct_claim(existing_payload, round_id)
+        if _parse_utc_timestamp(existing.lease_expires_at, "lease_expires_at") > now:
+            raise GenerationAlreadyRunningError(f"generation already running for round: {round_id}")
+        claim_shelf.key(round_id).delete()
+    claim_shelf.put(round_id, claim.dict())
+
+
+def _replace_round_and_release_in_transaction(
+    transaction: Any,
+    record: RoundRecord,
+    attempt_token: str,
+    now: datetime,
+    expected: RoundRecord | None,
+) -> None:
+    round_shelf = transaction.shelf(_ROUNDS_SHELF)
+    current = _read_round(round_shelf, record.id)
+    if expected is not None:
+        _require_expected_snapshot(current, expected)
+
+    claim_shelf = transaction.shelf(_CLAIMS_SHELF)
+    _require_live_matching_claim(claim_shelf, record.id, attempt_token, now)
+    round_shelf.put(record.id, record.dict())
+    claim_shelf.key(record.id).delete()
+
+
+def _validate_replacement(
+    record: RoundRecord,
+    expected: RoundRecord | None,
+) -> tuple[RoundRecord, RoundRecord | None]:
+    validated_record = _validate_record(record)
+    expected_snapshot = _validate_record(expected) if expected is not None else None
+    if expected_snapshot is not None and expected_snapshot.id != validated_record.id:
+        raise RoundSnapshotConflictError(
+            f"round snapshot does not match replacement ID: {validated_record.id}"
+        )
+    return validated_record, expected_snapshot
+
+
+def _validate_lease_duration(value: timedelta) -> timedelta:
+    if not isinstance(value, timedelta):
+        raise TypeError("lease_duration must be a timedelta")
+    if value <= timedelta(0):
+        raise ValueError("lease_duration must be positive")
+    return value
 
 
 def _read_payload(shelf: Any, key: str) -> Any | None:

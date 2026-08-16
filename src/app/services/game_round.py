@@ -141,7 +141,6 @@ class GameRoundService:
         self._generation_claims = generation_claims
         self._pipeline = pipeline
         self._owner_instance = owner_instance
-        self._claim_lease_duration = claim_lease_duration
         self._claim_heartbeat_interval = claim_heartbeat_interval
         self._provider_timeout = provider_timeout
         self._generation_admission_open = True
@@ -151,6 +150,13 @@ class GameRoundService:
             claim_heartbeat_interval,
             provider_timeout,
         )
+        if (
+            generation_claims is not None
+            and generation_claims.lease_duration != claim_lease_duration
+        ):
+            raise GameRoundValidationError(
+                "generation claims lease duration must match the service"
+            )
 
     async def create_round(self, display_name: str = "") -> RoundRecord:
         """Create a fresh round in level selection with normalized identity."""
@@ -323,19 +329,20 @@ class GameRoundService:
         record = await self._get_record(round_id)
         challenge, prompt = self._generation_context(record)
 
-        claimed_at = self._timestamp()
-        claim = AttemptClaim(
-            attempt_token=str(uuid4()),
-            owner_instance=owner_instance,
-            claimed_at=claimed_at,
-            lease_expires_at=(
-                self._as_datetime(claimed_at) + self._claim_lease_duration
-            ).isoformat(),
-        )
+        requested_at = self._timestamp()
+        attempt_token = str(uuid4())
         try:
-            await self._acquire_generation_claim(claims, round_id, claim, claimed_at)
+            claim = await self._acquire_generation_claim(
+                claims,
+                round_id,
+                attempt_token,
+                owner_instance,
+                requested_at,
+            )
         except RoundNotClaimableError as error:
             raise GameRoundConflictError(f"cannot generate from {record.state.value}") from error
+        except StaleAttemptTokenError as error:
+            raise GameRoundConflictError("generation acquisition expired") from error
 
         try:
             raw_result = await self._run_claimed_pipeline(
@@ -351,7 +358,11 @@ class GameRoundService:
                 return await self._persist_generation_success(record, result, claims, claim)
             return await self._persist_generation_failure(record, result, claims, claim)
         except asyncio.CancelledError:
-            await self._release_cancelled_attempt(claims, round_id, claim)
+            await self._release_cancelled_attempt(
+                claims,
+                round_id,
+                claim.attempt_token,
+            )
             raise
 
     def _admit_generation(self) -> asyncio.Task[object]:
@@ -606,7 +617,11 @@ class GameRoundService:
                 )
                 await self._cancel_and_settle_task(provider_task)
                 try:
-                    await self._release_cancelled_attempt(claims, round_id, claim)
+                    await self._release_cancelled_attempt(
+                        claims,
+                        round_id,
+                        claim.attempt_token,
+                    )
                 except Exception as release_error:
                     raise GameRoundConflictError("generation attempt is stale") from release_error
                 if heartbeat_error is None or isinstance(heartbeat_error, asyncio.CancelledError):
@@ -687,15 +702,11 @@ class GameRoundService:
     ) -> None:
         """Run the complete synchronous renewal unit outside the event loop."""
 
-        now = self._timestamp()
-        lease_expires_at = (self._as_datetime(now) + self._claim_lease_duration).isoformat()
         renewal = asyncio.create_task(
             asyncio.to_thread(
-                claims.renew,
+                claims.renew_fresh,
                 round_id,
                 claim.attempt_token,
-                lease_expires_at,
-                now,
             )
         )
         try:
@@ -758,7 +769,6 @@ class GameRoundService:
             claims,
             replacement,
             claim.attempt_token,
-            timestamp,
             record,
         )
         return replacement
@@ -800,7 +810,6 @@ class GameRoundService:
             claims,
             replacement,
             claim.attempt_token,
-            timestamp,
             record,
         )
         return replacement
@@ -809,24 +818,43 @@ class GameRoundService:
         self,
         claims: ShelfDbGenerationClaims,
         round_id: str,
-        claim: AttemptClaim,
-        claimed_at: str,
-    ) -> None:
-        """Settle acquisition before cancellation cleanup can inspect its claim."""
+        attempt_token: str,
+        owner_instance: str,
+        requested_at: str,
+    ) -> AttemptClaim:
+        """Settle fresh acquisition before cancellation cleanup can inspect it."""
 
         acquisition = asyncio.create_task(
-            asyncio.to_thread(claims.claim, round_id, claim, claimed_at)
+            asyncio.to_thread(
+                claims.acquire_fresh,
+                round_id,
+                attempt_token,
+                owner_instance,
+                requested_at,
+            )
         )
         try:
-            await asyncio.shield(acquisition)
+            acquired = await asyncio.shield(acquisition)
         except asyncio.CancelledError as cancellation:
             acquisition_error = await self._settle_cancelled_task(acquisition)
             if acquisition_error is None:
                 try:
-                    await self._release_cancelled_attempt(claims, round_id, claim)
+                    await self._release_cancelled_attempt(
+                        claims,
+                        round_id,
+                        attempt_token,
+                    )
                 except Exception as cleanup_error:
                     raise cancellation from cleanup_error
             raise
+
+        if (
+            not isinstance(acquired, AttemptClaim)
+            or acquired.attempt_token != attempt_token
+            or acquired.owner_instance != owner_instance
+        ):
+            raise StaleAttemptTokenError(f"stale attempt token for round: {round_id}")
+        return acquired
 
     async def _cancel_and_settle_task(
         self,
@@ -842,7 +870,7 @@ class GameRoundService:
         self,
         claims: ShelfDbGenerationClaims,
         round_id: str,
-        claim: AttemptClaim,
+        attempt_token: str,
     ) -> None:
         """Release a token after cancellation without swallowing cancellation."""
 
@@ -850,7 +878,7 @@ class GameRoundService:
             asyncio.to_thread(
                 claims.release_matching,
                 round_id,
-                claim.attempt_token,
+                attempt_token,
             )
         )
         release_error = await self._settle_cancelled_task(release)
@@ -911,15 +939,13 @@ class GameRoundService:
         claims: ShelfDbGenerationClaims,
         record: RoundRecord,
         attempt_token: str,
-        now: str,
         expected: RoundRecord,
     ) -> None:
         try:
             await asyncio.to_thread(
-                claims.replace_round_and_release,
+                claims.replace_round_and_release_fresh,
                 record,
                 attempt_token,
-                now,
                 expected=expected,
             )
         except (RoundSnapshotConflictError, StaleAttemptTokenError) as error:
