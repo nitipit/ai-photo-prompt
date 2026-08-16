@@ -211,8 +211,10 @@ Provider calls occur outside transactions. Generation claims use an atomic
 read/check/write transaction and contain a unique attempt token and expiring
 lease. Only the matching live token may renew, fail, or finalize. A concurrent
 request receives an already-running result instead of invoking a second provider.
-Expired claims may be replaced atomically; stale tokens cannot commit. A provider
-timeout stays shorter than the lease.
+Expired claims may be replaced atomically; stale tokens cannot commit. Short fake
+calls keep a timeout below one lease. Long-running Pi calls use a supervised,
+token-matching heartbeat; losing renewal cancels the provider and forbids
+finalization.
 
 Provider failure records a safe bounded failure, releases the claim, preserves
 the original prompt and challenge, and leaves the round in `generating`. Retry is
@@ -255,7 +257,8 @@ Bounded async protocols:
 
 Each receives explicit typed inputs and a timeout and returns a strict tagged
 success/error result. Raw provider exceptions never cross the pipeline boundary.
-The initial runtime wires deterministic fake providers only.
+Deterministic fake providers remain the test and explicit local-development mode;
+the kiosk selects the Pi provider explicitly and never silently falls back to fake.
 
 Scoring remains pure:
 
@@ -277,6 +280,56 @@ contains exactly two or three safe, concise, child-facing strings.
 
 A provider failure produces no score and never advances to Result. The Generating
 scene offers retry and a clearly separated exit-to-Ready action.
+
+### Production Pi provider
+
+Pi is a bounded provider, never a game controller. Each pipeline attempt uses two
+fresh `pi --mode rpc --no-session` subprocesses: one image-generation process and
+one combined evaluation process. Processes never share sessions or conversation
+state. The image process loads only the configured Codex bridge and exposes only
+`codex_imagegen`; the evaluator has no extensions or tools. Context files, skills,
+prompt templates, and built-in file or shell tools are disabled.
+
+The RPC client uses LF-delimited UTF-8 JSONL, command IDs, tool-call IDs, bounded
+stdout/stderr, a hard deadline, and process-group termination. Malformed records,
+bad correlation, unexpected tools, duplicate completion, early exit, or missing
+settlement fail the attempt safely. Assistant prose is never an authoritative
+image result. Image generation accepts exactly one successful
+`codex_imagegen` `tool_execution_end` and reads only
+`result.details.outputPath`.
+
+Submitting the round's generation action authorizes one image-generation attempt.
+A headless RPC client answers the bridge's correlated confirmation request only
+while that exact attempt authorization is live. A denied, cancelled, duplicate,
+late, or mismatched confirmation fails without success. Cancellation terminates
+and awaits the child before token-matching claim cleanup; a second cancellation
+cannot skip cleanup.
+
+Each attempt stages output in a server-derived private workspace beneath
+`data/pi-rpc/`. The provider cannot choose a public path. The artifact store
+rejects traversal, symlinks, overwrite, empty or non-PNG data, and configured
+size or dimension violations. It atomically publishes a validated file beneath
+`data/generated/<round-id>/<attempt-token>.png` and derives its browser URL from
+those server-owned identifiers. FastAPI mounts only `data/generated/` at
+`/generated/`; it never exposes the data root or persists a raw filesystem path.
+A fenced or failed round commit removes its token-scoped unreferenced artifact.
+
+The evaluator receives the materialized challenge, player prompt, target image,
+and generated image as host-supplied inputs. One strict JSON object contains
+`schema_version: 1`, the four prompt dimensions, three image-match dimensions,
+and exactly two or three bounded Thai feedback strings. Missing, unknown,
+wrong-typed, non-finite, out-of-range, fenced, or trailing output is rejected.
+Provider-supplied scores, state, URLs, and persistence fields are forbidden. The
+application reconstructs strict domain models and computes the only score through
+`score_total`.
+
+Pi timeouts, model, provider, thinking level, bridge path, private and published
+roots, process output limits, and claim heartbeat/lease values are explicit
+configuration. Provider choice is only `fake` or `pi`; missing Pi prerequisites
+in Pi mode fail visibly and never invoke fake. One image attempt and one
+evaluation attempt may run concurrently across the process, with bounded
+admission before claim acquisition so rounds do not hold leases while waiting in
+an unbounded provider queue.
 
 ## Leaderboard Contract
 
@@ -375,3 +428,11 @@ The skeleton is complete only when evidence shows:
 13. Generated paths mirror `templates/`, and runtime code never parses challenge
     Markdown.
 14. AI providers and browser modules never write game state directly.
+15. Pi RPC accepts one authorized image tool completion, validates and atomically
+    publishes its raster, and rejects non-authoritative paths or duplicate tools.
+16. Pi evaluation cannot set a score; strict dimensions and feedback are validated
+    before the application computes and atomically persists a complete result.
+17. Long-running claim heartbeats prevent duplicate live work, while renewal loss,
+    cancellation, expiry, abandon, and shutdown cannot produce a late write.
+18. Explicit Pi startup, mocked RPC failure/retry, server restart, and a bounded
+    real-image Chrome round pass without silent fake fallback.
