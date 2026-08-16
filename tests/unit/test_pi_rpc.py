@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import sys
 from pathlib import Path
 
@@ -71,12 +72,76 @@ def complete(text="assistant prose", duplicate=False):
     emit({"type": "agent_settled"})
 
 
+def spawn_delayed_marker(*, ignore_term=False, keep_rpc_fd=False, delay=0.35):
+    assert marker is not None
+    held_fd = os.dup(sys.stdout.fileno()) if keep_rpc_fd else -1
+    ready = marker.with_suffix(".ready")
+    descendant_code = (
+        "import os,pathlib,signal,sys,time;"
+        "fd=int(sys.argv[1]);marker=pathlib.Path(sys.argv[2]);"
+        "ready=pathlib.Path(sys.argv[3]);"
+        "signal.signal(signal.SIGTERM,signal.SIG_IGN) if sys.argv[4]=='1' else None;"
+        "ready.write_text('ready');"
+        "time.sleep(float(sys.argv[5]));"
+        "marker.write_text('alive');"
+        "os.close(fd) if fd>=0 else None"
+    )
+    child = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            descendant_code,
+            str(held_fd),
+            str(marker),
+            str(ready),
+            "1" if ignore_term else "0",
+            str(delay),
+        ],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        close_fds=True,
+        pass_fds=(held_fd,) if held_fd >= 0 else (),
+    )
+    if held_fd >= 0:
+        os.close(held_fd)
+    marker.with_suffix(".descendant-pid").write_text(str(child.pid), encoding="utf-8")
+    for _ in range(1000):
+        if ready.exists():
+            break
+        time.sleep(0.001)
+    else:
+        os._exit(12)
+
+
+def leader_exit_payload(final_payload, *, fill_queue=True):
+    marker.with_suffix(".leader-pid").write_text(str(os.getpid()), encoding="utf-8")
+    prompt = json.dumps(
+        {"id": request["id"], "type": "response", "command": "prompt", "success": True},
+        separators=(",", ":"),
+    ).encode() + b"\n"
+    filler = b"{}\n" * 1024 if fill_queue else b""
+    sys.stdout.buffer.write(prompt + filler + final_payload)
+    sys.stdout.buffer.flush()
+    os._exit(0)
+
+
 if mode in {"success", "crlf", "inspect"}:
     expected_images = [{"type": "image", "data": "QUJD", "mimeType": "image/png"}]
     if mode == "inspect" and request.get("images") != expected_images:
         os._exit(11)
     prompt_response()
     complete("before\u2028after" if mode == "crlf" else "generated/assistant-only.png")
+elif mode == "leader-exit-success":
+    spawn_delayed_marker()
+    final = b'{"type":"agent_end"}\n{"type":"agent_settled"}\n'
+    leader_exit_payload(final)
+elif mode == "leader-exit-protocol":
+    spawn_delayed_marker()
+    leader_exit_payload(b"{not-json\n")
+elif mode == "leader-exit-cancel":
+    spawn_delayed_marker(ignore_term=True, keep_rpc_fd=True, delay=0.8)
+    leader_exit_payload(b"", fill_queue=False)
 elif mode == "malformed":
     sys.stdout.buffer.write(b"{not-json\n")
     sys.stdout.buffer.flush()
@@ -281,6 +346,27 @@ def request_for(
         max_jsonl_records=max_jsonl_records,
         max_evidence_records=max_evidence_records,
     )
+
+
+async def wait_for_pid_file(path: Path, *, timeout: float = 1.0) -> int:
+    deadline = asyncio.get_running_loop().time() + timeout
+    while not path.exists():
+        if asyncio.get_running_loop().time() >= deadline:
+            raise AssertionError(f"PID file was not created: {path}")
+        await asyncio.sleep(0.01)
+    return int(path.read_text(encoding="utf-8"))
+
+
+async def wait_for_process_exit(pid: int, *, timeout: float = 1.0) -> bool:
+    deadline = asyncio.get_running_loop().time() + timeout
+    while True:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return True
+        if asyncio.get_running_loop().time() >= deadline:
+            return False
+        await asyncio.sleep(0.01)
 
 
 @pytest.mark.asyncio
@@ -544,6 +630,81 @@ async def test_duplicate_unexpected_and_late_confirmation_fail(
         await run_pi_rpc(request_for(fake_child, mode, authorize_confirmation=authorized))
 
     assert raised.value.code == code
+
+
+@pytest.mark.asyncio
+@pytest.mark.skipif(os.name != "posix", reason="POSIX process-group regression")
+@pytest.mark.parametrize(
+    ("mode", "error_type"),
+    [
+        ("leader-exit-success", None),
+        ("leader-exit-protocol", PiRPCProtocolError),
+    ],
+)
+async def test_exited_leader_descendants_are_cleaned_without_delayed_markers(
+    fake_child: Path,
+    tmp_path: Path,
+    mode: str,
+    error_type: type[PiRPCError] | None,
+) -> None:
+    markers: list[Path] = []
+    for iteration in range(10):
+        marker = tmp_path / f"{mode}-{iteration}.txt"
+        markers.append(marker)
+        request = request_for(
+            fake_child,
+            mode,
+            marker=marker,
+            allowed_tool_names=(),
+            max_tool_starts=0,
+        )
+        if error_type is None:
+            result = await run_pi_rpc(request)
+            assert result.events[-1]["type"] == "agent_settled"
+        else:
+            with pytest.raises(error_type) as raised:
+                await run_pi_rpc(request)
+            assert raised.value.code == "protocol_error"
+
+    await asyncio.sleep(0.4)
+    for marker in markers:
+        assert not marker.exists()
+        descendant_pid = int(marker.with_suffix(".descendant-pid").read_text(encoding="utf-8"))
+        assert await wait_for_process_exit(descendant_pid)
+
+
+@pytest.mark.asyncio
+@pytest.mark.skipif(os.name != "posix", reason="POSIX process-group regression")
+async def test_repeated_cancellation_cleans_descendant_after_leader_exit(
+    fake_child: Path,
+    tmp_path: Path,
+) -> None:
+    marker = tmp_path / "cancelled-leader-exit.txt"
+    task = asyncio.create_task(
+        run_pi_rpc(
+            request_for(
+                fake_child,
+                "leader-exit-cancel",
+                timeout=10,
+                marker=marker,
+                allowed_tool_names=(),
+                max_tool_starts=0,
+            )
+        )
+    )
+    leader_pid = await wait_for_pid_file(marker.with_suffix(".leader-pid"))
+    assert await wait_for_process_exit(leader_pid)
+
+    task.cancel()
+    await asyncio.sleep(0)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    await asyncio.sleep(0.4)
+    assert not marker.exists()
+    descendant_pid = int(marker.with_suffix(".descendant-pid").read_text(encoding="utf-8"))
+    assert await wait_for_process_exit(descendant_pid)
 
 
 @pytest.mark.asyncio

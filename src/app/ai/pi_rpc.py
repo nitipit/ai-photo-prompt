@@ -339,35 +339,80 @@ async def _close_stdin(process: asyncio.subprocess.Process) -> None:
         pass
 
 
-def _signal_group(process: asyncio.subprocess.Process, sig: signal.Signals) -> None:
-    if process.returncode is not None:
-        return
+def _signal_group(
+    process: asyncio.subprocess.Process,
+    process_group_id: int | None,
+    sig: signal.Signals,
+) -> bool:
     try:
         if os.name == "posix":
-            os.killpg(process.pid, sig)
+            if process_group_id is None:
+                return False
+            os.killpg(process_group_id, sig)
+        elif process.returncode is not None:
+            return False
         elif sig is signal.SIGKILL:
             process.kill()
         else:
             process.terminate()
-    except (ProcessLookupError, PermissionError, OSError):
-        pass
+    except ProcessLookupError:
+        return False
+    except (PermissionError, OSError):
+        return True
+    return True
+
+
+def _process_group_exists(process_group_id: int) -> bool:
+    try:
+        os.killpg(process_group_id, 0)
+    except ProcessLookupError:
+        return False
+    except (PermissionError, OSError):
+        return True
+    return True
+
+
+async def _wait_for_process_group_exit(process_group_id: int, timeout: float) -> bool:
+    deadline = asyncio.get_running_loop().time() + timeout
+    while _process_group_exists(process_group_id):
+        remaining = deadline - asyncio.get_running_loop().time()
+        if remaining <= 0:
+            return False
+        await asyncio.sleep(min(0.01, remaining))
+    return True
 
 
 async def _cleanup_process(
     process: asyncio.subprocess.Process,
+    process_group_id: int | None,
     reader_tasks: Sequence[asyncio.Task[None]],
     process_wait: asyncio.Task[int],
 ) -> None:
     await _close_stdin(process)
-    _signal_group(process, signal.SIGTERM)
-    try:
-        await asyncio.wait_for(process.wait(), timeout=0.5)
-    except TimeoutError:
-        _signal_group(process, signal.SIGKILL)
+    if os.name == "posix":
+        assert process_group_id is not None
+        # A live member pins this freshly spawned PGID. Stop permanently at the
+        # first ESRCH so a delayed KILL cannot target a group created after ours vanished.
+        if _signal_group(
+            process, process_group_id, signal.SIGTERM
+        ) and not await _wait_for_process_group_exit(process_group_id, 0.5):
+            if _signal_group(process, process_group_id, signal.SIGKILL):
+                await _wait_for_process_group_exit(process_group_id, 0.5)
+        if not process_wait.done():
+            try:
+                await asyncio.wait_for(asyncio.shield(process_wait), timeout=0.5)
+            except TimeoutError:
+                process_wait.cancel()
+    else:
+        _signal_group(process, None, signal.SIGTERM)
         try:
-            await asyncio.wait_for(process.wait(), timeout=0.5)
+            await asyncio.wait_for(asyncio.shield(process_wait), timeout=0.5)
         except TimeoutError:
-            pass
+            _signal_group(process, None, signal.SIGKILL)
+            try:
+                await asyncio.wait_for(asyncio.shield(process_wait), timeout=0.5)
+            except TimeoutError:
+                pass
     for task in reader_tasks:
         if task.done():
             continue
@@ -385,10 +430,13 @@ async def _cleanup_process(
 
 async def _cleanup_resilient(
     process: asyncio.subprocess.Process,
+    process_group_id: int | None,
     reader_tasks: Sequence[asyncio.Task[None]],
     process_wait: asyncio.Task[int],
 ) -> None:
-    cleanup = asyncio.create_task(_cleanup_process(process, reader_tasks, process_wait))
+    cleanup = asyncio.create_task(
+        _cleanup_process(process, process_group_id, reader_tasks, process_wait)
+    )
     cancelled = False
     while not cleanup.done():
         try:
@@ -465,6 +513,7 @@ async def run_pi_rpc(request: PiRPCRequest) -> PiRPCResult:
         prompt["images"] = [attachment.as_rpc() for attachment in request.attachments]
 
     process: asyncio.subprocess.Process | None = None
+    process_group_id: int | None = None
     reader_tasks: list[asyncio.Task[None]] = []
     process_wait: asyncio.Task[int] | None = None
     stdout_capture = _ByteCapture(request.max_stdout_bytes)
@@ -483,6 +532,9 @@ async def run_pi_rpc(request: PiRPCRequest) -> PiRPCResult:
         except (OSError, ValueError) as error:
             raise PiRPCProcessError("could not start Pi RPC child", code="spawn_error") from error
 
+        # start_new_session makes the child PID this attempt's fresh PGID. Capture
+        # it before another await; cleanup must not rediscover a group from an exited leader.
+        process_group_id = process.pid if os.name == "posix" else None
         assert process.stdout is not None and process.stderr is not None
         queue: asyncio.Queue[_QueueItem] = asyncio.Queue(
             maxsize=min(_MAX_PENDING_RECORDS, request.max_jsonl_records)
@@ -814,7 +866,7 @@ async def run_pi_rpc(request: PiRPCRequest) -> PiRPCResult:
         raise _attach_failure(error, stdout_capture, stderr_capture, process) from None
     finally:
         if process is not None and process_wait is not None:
-            await _cleanup_resilient(process, reader_tasks, process_wait)
+            await _cleanup_resilient(process, process_group_id, reader_tasks, process_wait)
 
 
 async def run_rpc(
