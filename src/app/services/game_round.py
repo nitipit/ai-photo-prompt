@@ -81,7 +81,7 @@ class GenerationStatus:
 
 
 class AIPipelineRunner(Protocol):
-    """Async runner compatible with the local fake pipeline boundary."""
+    """Async runner with token-scoped rollback after an uncommitted success."""
 
     async def run(
         self,
@@ -91,6 +91,8 @@ class AIPipelineRunner(Protocol):
         *,
         attempt: GenerationAttempt,
     ) -> AIPipelineResult: ...
+
+    async def rollback_attempt(self, attempt: GenerationAttempt) -> None: ...
 
 
 _PROMPT_DEADLINE = timedelta(seconds=90)
@@ -344,6 +346,10 @@ class GameRoundService:
         except StaleAttemptTokenError as error:
             raise GameRoundConflictError("generation acquisition expired") from error
 
+        attempt = GenerationAttempt(
+            round_id=round_id,
+            attempt_token=claim.attempt_token,
+        )
         try:
             raw_result = await self._run_claimed_pipeline(
                 claims,
@@ -355,14 +361,36 @@ class GameRoundService:
             )
             result = self._normalize_pipeline_result(raw_result)
             if result.status is PipelineResultStatus.SUCCESS:
-                return await self._persist_generation_success(record, result, claims, claim)
+                try:
+                    persisted = await self._persist_generation_success(
+                        record,
+                        result,
+                        claims,
+                        claim,
+                    )
+                except BaseException as commit_error:
+                    cleanup_error = await self._rollback_pipeline_attempt(pipeline, attempt)
+                    if cleanup_error is not None:
+                        raise commit_error from cleanup_error
+                    raise
+                if persisted.generated_artifact is None:
+                    cleanup_error = await self._rollback_pipeline_attempt(pipeline, attempt)
+                    if cleanup_error is not None:
+                        raise cleanup_error
+                return persisted
             return await self._persist_generation_failure(record, result, claims, claim)
-        except asyncio.CancelledError:
-            await self._release_cancelled_attempt(
-                claims,
-                round_id,
-                claim.attempt_token,
-            )
+        except asyncio.CancelledError as cancellation:
+            cleanup_error = await self._rollback_pipeline_attempt(pipeline, attempt)
+            try:
+                await self._release_cancelled_attempt(
+                    claims,
+                    round_id,
+                    claim.attempt_token,
+                )
+            except Exception as release_error:
+                raise cancellation from release_error
+            if cleanup_error is not None:
+                raise cancellation from cleanup_error
             raise
 
     def _admit_generation(self) -> asyncio.Task[object]:
@@ -866,6 +894,22 @@ class GameRoundService:
             task.cancel()
         return await self._settle_cancelled_task(task)
 
+    async def _rollback_pipeline_attempt(
+        self,
+        pipeline: AIPipelineRunner,
+        attempt: GenerationAttempt,
+    ) -> BaseException | None:
+        """Settle an optional async token rollback through repeated cancellation."""
+
+        rollback = getattr(pipeline, "rollback_attempt", None)
+        if rollback is None:
+            return None
+        try:
+            cleanup = asyncio.create_task(rollback(attempt))
+        except BaseException as error:
+            return error
+        return await self._settle_cancelled_task(cleanup)
+
     async def _release_cancelled_attempt(
         self,
         claims: ShelfDbGenerationClaims,
@@ -941,13 +985,23 @@ class GameRoundService:
         attempt_token: str,
         expected: RoundRecord,
     ) -> None:
-        try:
-            await asyncio.to_thread(
+        finalization = asyncio.create_task(
+            asyncio.to_thread(
                 claims.replace_round_and_release_fresh,
                 record,
                 attempt_token,
                 expected=expected,
             )
+        )
+        try:
+            await asyncio.shield(finalization)
+        except asyncio.CancelledError as cancellation:
+            finalization_error = await self._settle_cancelled_task(finalization)
+            if finalization_error is None:
+                # The durable CAS won before cancellation could stop it. Keep
+                # its referenced artifact and report the committed result.
+                return
+            raise cancellation from finalization_error
         except (RoundSnapshotConflictError, StaleAttemptTokenError) as error:
             raise GameRoundConflictError("generation attempt is stale") from error
 

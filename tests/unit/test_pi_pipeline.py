@@ -57,6 +57,7 @@ class FakeStore:
             path=root / "published" / "attempt-1.png",
             url="/generated/round-1/attempt-1.png",
         )
+        self.workspace_cleanups: list[GenerationAttempt] = []
         self.discards: list[GenerationAttempt] = []
         self.reads = 0
 
@@ -70,6 +71,9 @@ class FakeStore:
         if not self.staged_path.is_file():
             raise ValueError("missing staged image")
         return self.published
+
+    def cleanup_workspace(self, attempt: GenerationAttempt) -> None:
+        self.workspace_cleanups.append(attempt)
 
     def discard(self, attempt: GenerationAttempt) -> None:
         self.discards.append(attempt)
@@ -242,6 +246,7 @@ async def test_success_uses_two_attachments_and_computes_only_application_score(
     ]
     assert "Attachment 1 is the approved target reference" in evaluator_payload["instruction"]
     assert "Attachment 2 is the generated candidate" in evaluator_payload["instruction"]
+    assert store.workspace_cleanups == [ATTEMPT]
     assert store.discards == []
 
 
@@ -276,6 +281,7 @@ async def test_pipeline_integrates_with_real_atomic_artifact_store(
         f"/generated/{actual_attempt.round_id}/{actual_attempt.attempt_token}.png"
     )
     assert store.resolve_public(actual_attempt).read_bytes() == valid_png()
+    assert not store.workspace_for(actual_attempt).exists()
 
 
 @pytest.mark.asyncio
@@ -461,6 +467,7 @@ async def test_two_or_three_feedback_lines_are_accepted(
 
     assert result.status is PipelineResultStatus.SUCCESS
     assert len(result.feedback) == count
+    assert store.workspace_cleanups == [ATTEMPT]
     assert store.discards == []
 
 

@@ -51,6 +51,8 @@ class ArtifactStore(Protocol):
 
     def publish(self, attempt: GenerationAttempt, provider_path: str) -> PublishedArtifact: ...
 
+    def cleanup_workspace(self, attempt: GenerationAttempt) -> None: ...
+
     def discard(self, attempt: GenerationAttempt) -> None: ...
 
     def read(self, published: PublishedArtifact) -> bytes: ...
@@ -177,6 +179,7 @@ class PiAIPipeline:
                 score=score,
                 feedback=feedback,
             )
+            await self._cleanup_workspace(attempt)
             succeeded = True
             return result
         except asyncio.CancelledError:
@@ -189,6 +192,11 @@ class PiAIPipeline:
         finally:
             if not succeeded and cleanup_needed:
                 await self._discard_safely(attempt)
+
+    async def rollback_attempt(self, attempt: GenerationAttempt) -> None:
+        """Idempotently discard one uncommitted attempt's token-scoped files."""
+
+        await self._discard_safely(attempt)
 
     def _image_request(
         self,
@@ -484,6 +492,14 @@ class PiAIPipeline:
         if type(data) is not bytes or not data:
             raise _PipelineFailure("artifact")
         return data
+
+    async def _cleanup_workspace(self, attempt: GenerationAttempt) -> None:
+        try:
+            await self._run_filesystem_unit(self._artifact_store.cleanup_workspace, attempt)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            raise _PipelineFailure("artifact") from None
 
     async def _discard_safely(self, attempt: GenerationAttempt) -> None:
         try:

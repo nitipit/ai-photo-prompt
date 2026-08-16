@@ -11,10 +11,12 @@ import os
 import threading
 import uuid
 import zlib
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path, PureWindowsPath
 from stat import S_ISDIR, S_ISLNK, S_ISREG
 from typing import Any
+from urllib.parse import urlsplit
 
 from app.domain.models import ImageArtifact
 
@@ -25,6 +27,8 @@ PROVIDER_OUTPUT_PATH = Path("output") / "generated.png"
 _DEFAULT_MAX_BYTES = 20 * 1024 * 1024
 _DEFAULT_MAX_WIDTH = 4096
 _DEFAULT_MAX_HEIGHT = 4096
+_DEFAULT_RECONCILIATION_ENTRIES = 10_000
+_INFLATE_CHUNK_BYTES = 64 * 1024
 
 
 class ArtifactStoreError(ValueError):
@@ -37,6 +41,28 @@ class ArtifactSecurityError(ArtifactStoreError):
 
 class ArtifactValidationError(ArtifactStoreError):
     """The provider file was not a supported, bounded PNG."""
+
+
+class ArtifactReconciliationLimitError(ArtifactStoreError):
+    """Startup reconciliation exceeded its configured filesystem-entry bound."""
+
+
+@dataclass(frozen=True, slots=True)
+class ArtifactReconciliation:
+    """Bounded startup cleanup counts returned by :meth:`reconcile`.
+
+    ``inspected_entries`` counts every directory entry examined below either
+    owned root. Removed counts include only entries that were still safe and
+    removable when cleanup ran. ``retained_public_artifacts`` counts referenced
+    canonical public PNGs, while ``skipped_unsafe_entries`` counts malformed,
+    special, or symlink-replaced entries that were not followed.
+    """
+
+    inspected_entries: int
+    removed_private_workspaces: int
+    removed_public_artifacts: int
+    retained_public_artifacts: int
+    skipped_unsafe_entries: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -241,28 +267,101 @@ class GeneratedArtifactStore:
             data, _ = self._read_png_file(published.final_path, self.published_root)
             return data
 
-    def discard(self, attempt: GenerationAttempt) -> None:
-        """Remove only this attempt's workspace and published artifact.
-
-        Symlink replacements and non-directory replacements are left untouched;
-        cleanup never follows them.  Empty round directories are removed only
-        after the token-scoped entries have been handled.
-        """
+    def cleanup_workspace(self, attempt: GenerationAttempt) -> None:
+        """Remove only this attempt's private staging workspace, idempotently."""
 
         with self._lock:
             round_id, token = _validated_attempt_ids(attempt)
             workspace = self.private_root / round_id / token
-            final_path = self.published_root / round_id / f"{token}.png"
             if _cleanup_path_is_safe(workspace, self.private_root):
                 _remove_owned_tree(workspace)
-            if _cleanup_path_is_safe(final_path, self.published_root):
-                _remove_owned_file(final_path)
             if _cleanup_path_is_safe(workspace.parent, self.private_root):
                 _remove_empty_owned_dir(workspace.parent, self.private_root)
+
+    def discard(self, attempt: GenerationAttempt) -> None:
+        """Remove this attempt's private workspace and public artifact.
+
+        Symlink replacements and non-directory replacements are left untouched;
+        cleanup never follows them. Empty round directories are removed only
+        after the token-scoped entries have been handled. The operation is
+        idempotent and derives both paths from the exact attempt token.
+        """
+
+        with self._lock:
+            round_id, token = _validated_attempt_ids(attempt)
+            self.cleanup_workspace(attempt)
+            final_path = self.published_root / round_id / f"{token}.png"
+            if _cleanup_path_is_safe(final_path, self.published_root):
+                _remove_owned_file(final_path)
             if _cleanup_path_is_safe(final_path.parent, self.published_root):
                 _remove_empty_owned_dir(final_path.parent, self.published_root)
 
     cleanup = discard
+
+    def reconcile(
+        self,
+        referenced_urls: Iterable[str],
+        *,
+        max_entries: int = _DEFAULT_RECONCILIATION_ENTRIES,
+    ) -> ArtifactReconciliation:
+        """Remove bounded startup leftovers without following symlinks.
+
+        Input is a finite iterable of durable artifact URL strings. URLs outside
+        this store's public prefix are ignored; URLs under the prefix must have
+        the exact derived ``<round UUID>/<attempt UUID>.png`` shape. At most
+        ``max_entries`` filesystem entries across both roots may be inspected.
+        If that bound would be exceeded, this method raises
+        :class:`ArtifactReconciliationLimitError` before deleting anything.
+
+        Every canonical private attempt workspace is removed. A canonical public
+        token PNG is removed only when its exact derived URL is absent from the
+        input. Symlinked roots, round/token replacements, and special entries are
+        never followed or deleted. The returned counts describe this invocation;
+        callers own obtaining the durable URL snapshot and deciding whether a
+        limit error should fail startup or be retried with a larger explicit
+        bound. This primitive performs no database or FastAPI lifecycle work.
+        """
+
+        bound = _positive_int(max_entries, "max_entries")
+        references = _validated_referenced_paths(referenced_urls, self.public_prefix)
+        with self._lock:
+            scan = _ReconciliationScan(bound)
+            private_plans = _plan_private_reconciliation(self.private_root, scan)
+            public_plans, retained = _plan_public_reconciliation(
+                self.published_root,
+                references,
+                scan,
+            )
+
+            removed_private = 0
+            for workspace, descendants in private_plans:
+                for path in descendants:
+                    _remove_reconciliation_entry(path, self.private_root)
+                if _remove_reconciliation_entry(workspace, self.private_root):
+                    removed_private += 1
+                else:
+                    scan.skip()
+                if _cleanup_path_is_safe(workspace.parent, self.private_root):
+                    _remove_empty_owned_dir(workspace.parent, self.private_root)
+
+            removed_public = 0
+            for path in public_plans:
+                if _cleanup_path_is_safe(path, self.published_root):
+                    _remove_owned_file(path)
+                    if not _path_exists(path):
+                        removed_public += 1
+                else:
+                    scan.skip()
+                if _cleanup_path_is_safe(path.parent, self.published_root):
+                    _remove_empty_owned_dir(path.parent, self.published_root)
+
+            return ArtifactReconciliation(
+                inspected_entries=scan.inspected,
+                removed_private_workspaces=removed_private,
+                removed_public_artifacts=removed_public,
+                retained_public_artifacts=retained,
+                skipped_unsafe_entries=scan.skipped,
+            )
 
     def _published_path(self, attempt: GenerationAttempt) -> Path:
         round_id, token = _validated_attempt_ids(attempt)
@@ -599,6 +698,189 @@ def _remove_empty_owned_dir(path: Path, root: Path) -> None:
         pass
 
 
+class _ReconciliationScan:
+    def __init__(self, max_entries: int) -> None:
+        self.max_entries = max_entries
+        self.inspected = 0
+        self.skipped = 0
+
+    def inspect(self) -> None:
+        self.inspected += 1
+        if self.inspected > self.max_entries:
+            raise ArtifactReconciliationLimitError(
+                "artifact reconciliation exceeds the filesystem-entry bound"
+            )
+
+    def skip(self) -> None:
+        self.skipped += 1
+
+
+def _validated_referenced_paths(
+    referenced_urls: Iterable[str],
+    public_prefix: str,
+) -> set[tuple[str, str]]:
+    if isinstance(referenced_urls, (str, bytes)):
+        raise TypeError("referenced_urls must be an iterable of URL strings")
+    references: set[tuple[str, str]] = set()
+    try:
+        values = iter(referenced_urls)
+    except TypeError as error:
+        raise TypeError("referenced_urls must be an iterable of URL strings") from error
+    prefix = f"{public_prefix}/"
+    for value in values:
+        if type(value) is not str or not value:
+            raise ValueError("referenced artifact URLs must be non-empty strings")
+        parsed = urlsplit(value)
+        if parsed.scheme or parsed.netloc or parsed.query or parsed.fragment:
+            raise ValueError("referenced artifact URLs must be local paths without query data")
+        if not parsed.path.startswith(prefix):
+            continue
+        parts = parsed.path.removeprefix(prefix).split("/")
+        if len(parts) != 2 or not parts[1].endswith(".png"):
+            raise ValueError("referenced generated artifact URL has an invalid shape")
+        round_id = _canonical_uuid(parts[0], "referenced round ID")
+        token = _canonical_uuid(parts[1].removesuffix(".png"), "referenced attempt token")
+        if parts != [round_id, f"{token}.png"]:
+            raise ValueError("referenced generated artifact URL is not canonical")
+        references.add((round_id, f"{token}.png"))
+    return references
+
+
+def _plan_private_reconciliation(
+    root: Path,
+    scan: _ReconciliationScan,
+) -> list[tuple[Path, list[Path]]]:
+    plans: list[tuple[Path, list[Path]]] = []
+    if not _safe_directory_exists(root):
+        return plans
+    with os.scandir(root) as rounds:
+        for round_entry in rounds:
+            scan.inspect()
+            round_path = Path(round_entry.path)
+            if not _is_canonical_uuid(round_entry.name) or not _safe_directory_exists(round_path):
+                scan.skip()
+                continue
+            with os.scandir(round_path) as attempts:
+                for attempt_entry in attempts:
+                    scan.inspect()
+                    workspace = Path(attempt_entry.path)
+                    if not _is_canonical_uuid(attempt_entry.name) or not _safe_directory_exists(
+                        workspace
+                    ):
+                        scan.skip()
+                        continue
+                    descendants: list[Path] = []
+                    _plan_workspace_descendants(workspace, descendants, scan)
+                    plans.append((workspace, descendants))
+    return plans
+
+
+def _plan_workspace_descendants(
+    directory: Path,
+    descendants: list[Path],
+    scan: _ReconciliationScan,
+) -> None:
+    with os.scandir(directory) as entries:
+        for entry in entries:
+            scan.inspect()
+            path = Path(entry.path)
+            try:
+                state = os.lstat(path)
+            except FileNotFoundError:
+                continue
+            if S_ISDIR(state.st_mode) and not S_ISLNK(state.st_mode):
+                _plan_workspace_descendants(path, descendants, scan)
+                descendants.append(path)
+            elif S_ISREG(state.st_mode) or S_ISLNK(state.st_mode):
+                descendants.append(path)
+            else:
+                scan.skip()
+
+
+def _plan_public_reconciliation(
+    root: Path,
+    references: set[tuple[str, str]],
+    scan: _ReconciliationScan,
+) -> tuple[list[Path], int]:
+    plans: list[Path] = []
+    retained = 0
+    if not _safe_directory_exists(root):
+        return plans, retained
+    with os.scandir(root) as rounds:
+        for round_entry in rounds:
+            scan.inspect()
+            round_path = Path(round_entry.path)
+            if not _is_canonical_uuid(round_entry.name) or not _safe_directory_exists(round_path):
+                scan.skip()
+                continue
+            with os.scandir(round_path) as artifacts:
+                for artifact_entry in artifacts:
+                    scan.inspect()
+                    artifact_path = Path(artifact_entry.path)
+                    token_name = artifact_entry.name.removesuffix(".png")
+                    try:
+                        state = os.lstat(artifact_path)
+                    except FileNotFoundError:
+                        continue
+                    canonical = (
+                        artifact_entry.name.endswith(".png")
+                        and _is_canonical_uuid(token_name)
+                        and S_ISREG(state.st_mode)
+                        and not S_ISLNK(state.st_mode)
+                    )
+                    if not canonical:
+                        scan.skip()
+                        continue
+                    key = (round_entry.name, artifact_entry.name)
+                    if key in references:
+                        retained += 1
+                    else:
+                        plans.append(artifact_path)
+    return plans, retained
+
+
+def _safe_directory_exists(path: Path) -> bool:
+    try:
+        state = os.lstat(path)
+    except FileNotFoundError:
+        return False
+    return S_ISDIR(state.st_mode) and not S_ISLNK(state.st_mode)
+
+
+def _is_canonical_uuid(value: str) -> bool:
+    try:
+        return _canonical_uuid(value, "filesystem entry") == value
+    except ValueError:
+        return False
+
+
+def _remove_reconciliation_entry(path: Path, owned_root: Path) -> bool:
+    """Remove one pre-scanned entry only if every component is still owned-safe."""
+
+    if not _cleanup_path_is_safe(path, owned_root):
+        return False
+    try:
+        state = os.lstat(path)
+    except FileNotFoundError:
+        return True
+    try:
+        if S_ISREG(state.st_mode):
+            path.unlink()
+        elif S_ISDIR(state.st_mode):
+            path.rmdir()
+    except OSError:
+        return False
+    return not _path_exists(path)
+
+
+def _path_exists(path: Path) -> bool:
+    try:
+        os.lstat(path)
+    except FileNotFoundError:
+        return False
+    return True
+
+
 def _parse_png(data: bytes, max_bytes: int, max_width: int, max_height: int) -> PNGMetadata:
     if len(data) > max_bytes:
         raise ArtifactValidationError("PNG artifact exceeds the byte bound")
@@ -611,7 +893,8 @@ def _parse_png(data: bytes, max_bytes: int, max_width: int, max_height: int) -> 
     seen_idat = False
     idat_closed = False
     width = height = 0
-    color_type = -1
+    bit_depth = color_type = -1
+    idat_payloads: list[bytes] = []
     while offset < len(data):
         if len(data) - offset < 12:
             raise ArtifactValidationError("PNG chunk is truncated")
@@ -666,11 +949,19 @@ def _parse_png(data: bytes, max_bytes: int, max_width: int, max_height: int) -> 
             if idat_closed:
                 raise ArtifactValidationError("PNG IDAT chunks are not consecutive")
             seen_idat = True
+            idat_payloads.append(payload)
         elif chunk_type == b"IEND":
             if len(payload) != 0 or not seen_idat or offset != len(data):
                 raise ArtifactValidationError("PNG IEND is invalid or not final")
             if color_type == 3 and not seen_plte:
                 raise ArtifactValidationError("indexed PNG is missing its palette")
+            _validate_png_raster(
+                idat_payloads,
+                width=width,
+                height=height,
+                bit_depth=bit_depth,
+                color_type=color_type,
+            )
             return PNGMetadata(width=width, height=height, byte_size=len(data))
         elif chunk_type[0] < 97:
             raise ArtifactValidationError(f"unsupported critical PNG chunk: {chunk_type!r}")
@@ -682,8 +973,67 @@ def _parse_png(data: bytes, max_bytes: int, max_width: int, max_height: int) -> 
     raise ArtifactValidationError("PNG is missing final IEND")
 
 
+def _validate_png_raster(
+    idat_payloads: Iterable[bytes],
+    *,
+    width: int,
+    height: int,
+    bit_depth: int,
+    color_type: int,
+) -> None:
+    channels = {0: 1, 2: 3, 3: 1, 4: 2, 6: 4}[color_type]
+    row_data_bytes = (width * channels * bit_depth + 7) // 8
+    scanline_bytes = row_data_bytes + 1
+    expected_decoded_bytes = height * scanline_bytes
+    payloads = tuple(idat_payloads)
+    decoder = zlib.decompressobj()
+    decoded_bytes = 0
+
+    try:
+        for payload_index, payload in enumerate(payloads):
+            if decoder.eof and payload:
+                raise ArtifactValidationError("PNG zlib stream has trailing data")
+            source = payload
+            while source:
+                remaining = expected_decoded_bytes + 1 - decoded_bytes
+                if remaining <= 0:
+                    raise ArtifactValidationError("PNG raster exceeds the decoded-byte bound")
+                output = decoder.decompress(source, min(_INFLATE_CHUNK_BYTES, remaining))
+                source = decoder.unconsumed_tail
+                _validate_png_filters(output, decoded_bytes, scanline_bytes)
+                decoded_bytes += len(output)
+                if decoded_bytes > expected_decoded_bytes:
+                    raise ArtifactValidationError("PNG raster exceeds the decoded-byte bound")
+                if decoder.eof:
+                    if decoder.unused_data or source or any(payloads[payload_index + 1 :]):
+                        raise ArtifactValidationError("PNG zlib stream has trailing data")
+                    break
+                if not source:
+                    break
+            if decoder.eof:
+                break
+    except zlib.error as error:
+        raise ArtifactValidationError("PNG zlib stream is invalid") from error
+
+    if not decoder.eof:
+        raise ArtifactValidationError("PNG zlib stream is truncated")
+    if decoder.unused_data:
+        raise ArtifactValidationError("PNG zlib stream has trailing data")
+    if decoded_bytes != expected_decoded_bytes:
+        raise ArtifactValidationError("PNG raster scanline length is invalid")
+
+
+def _validate_png_filters(output: bytes, decoded_offset: int, scanline_bytes: int) -> None:
+    first_filter = (-decoded_offset) % scanline_bytes
+    for index in range(first_filter, len(output), scanline_bytes):
+        if output[index] > 4:
+            raise ArtifactValidationError("PNG scanline filter is invalid")
+
+
 __all__ = [
     "ArtifactPublication",
+    "ArtifactReconciliation",
+    "ArtifactReconciliationLimitError",
     "ArtifactWorkspace",
     "ArtifactSecurityError",
     "ArtifactStoreError",

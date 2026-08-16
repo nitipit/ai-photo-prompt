@@ -90,6 +90,11 @@ class FakeAIPipeline:
             feedback=feedback_result.result["feedback"],
         )
 
+    async def rollback_attempt(self, attempt: GenerationAttempt) -> None:
+        """Keep fake attempts compatible with commit-aware service cleanup."""
+
+        del attempt
+
     @staticmethod
     def _failure(result: ProviderError) -> AIPipelineResult:
         return AIPipelineResult(status=PipelineResultStatus.ERROR, failure=result.error)
