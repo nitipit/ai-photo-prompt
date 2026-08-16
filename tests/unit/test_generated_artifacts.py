@@ -254,10 +254,15 @@ def test_configuration_and_attempt_identifiers_are_validated(tmp_path: Path) -> 
         store.prepare(GenerationAttempt(round_id="not-a-uuid", attempt_token=str(uuid4())))
 
 
-def test_png_metadata_supports_poc_dimensions(tmp_path: Path) -> None:
-    store, current, destination = prepared_store(tmp_path, max_width=1024, max_height=1024)
-    destination.write_bytes(png(640, 480))
+def test_pipeline_workspace_publish_and_read_support_poc_dimensions(tmp_path: Path) -> None:
+    store = GeneratedArtifactStore(tmp_path / "private", tmp_path / "published")
+    current = attempt()
+    workspace = store.prepare_workspace(current)
+    workspace.staged_path.write_bytes(png(1672, 941))
 
-    published = store.publish(current, PROVIDER_OUTPUT_PATH)
+    published = store.publish(current, workspace.relative_output_path)
 
-    assert (published.artifact.width, published.artifact.height) == (640, 480)
+    assert workspace.workspace == store.workspace_for(current)
+    assert workspace.relative_output_path == PROVIDER_OUTPUT_PATH.as_posix()
+    assert (published.artifact.width, published.artifact.height) == (1672, 941)
+    assert store.read(published) == published.final_path.read_bytes()

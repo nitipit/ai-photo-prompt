@@ -31,8 +31,9 @@ class FakeStore:
         self.relative_output_path = "generated.png"
         self.staged_path = self.workspace / self.relative_output_path
         self.published = PublishedArtifact(
-            ImageArtifact(url="/generated/round-1/attempt-1.png", mime_type="image/png"),
-            root / "published" / "attempt-1.png",
+            artifact=ImageArtifact(url="/generated/round-1/attempt-1.png", mime_type="image/png"),
+            path=root / "published" / "attempt-1.png",
+            url="/generated/round-1/attempt-1.png",
         )
         self.discards: list[GenerationAttempt] = []
         self.reads = 0
@@ -41,10 +42,10 @@ class FakeStore:
         self.workspace.mkdir(parents=True, exist_ok=True)
         return ArtifactWorkspace(self.workspace, self.relative_output_path, self.staged_path)
 
-    def publish(self, attempt: GenerationAttempt, staged_path: Path) -> PublishedArtifact:
+    def publish(self, attempt: GenerationAttempt, provider_path: str) -> PublishedArtifact:
         assert attempt is ATTEMPT
-        assert staged_path == self.staged_path
-        if not staged_path.is_file():
+        assert provider_path == self.relative_output_path
+        if not self.staged_path.is_file():
             raise ValueError("missing staged image")
         return self.published
 

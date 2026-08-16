@@ -15,11 +15,11 @@ import math
 import mimetypes
 import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
 from urllib.parse import urlsplit
 
+from app.ai.generated_artifacts import ArtifactWorkspace, PublishedArtifact
 from app.ai.pi_rpc import (
     PiImageAttachment,
     PiRPCError,
@@ -44,29 +44,12 @@ from app.domain.models import (
 from app.domain.scoring import score_total
 
 
-@dataclass(frozen=True, slots=True)
-class ArtifactWorkspace:
-    """Server-owned workspace and fixed relative output path for one attempt."""
-
-    workspace: Path
-    relative_output_path: str
-    staged_path: Path
-
-
-@dataclass(frozen=True, slots=True)
-class PublishedArtifact:
-    """Authoritative published image and its private final filesystem path."""
-
-    artifact: ImageArtifact
-    final_path: Path
-
-
 class ArtifactStore(Protocol):
     """Store boundary for token-scoped staging, publication, and cleanup."""
 
     def prepare_workspace(self, attempt: GenerationAttempt) -> ArtifactWorkspace: ...
 
-    def publish(self, attempt: GenerationAttempt, staged_path: Path) -> PublishedArtifact: ...
+    def publish(self, attempt: GenerationAttempt, provider_path: str) -> PublishedArtifact: ...
 
     def discard(self, attempt: GenerationAttempt) -> None: ...
 
@@ -150,7 +133,7 @@ class PiAIPipeline:
             )
             self._validate_image_completion(image_result, prepared.relative_output_path)
 
-            published = self._publish(attempt, prepared.staged_path)
+            published = self._publish(attempt, prepared.relative_output_path)
             generated_bytes = self._read_published(published)
             target_bytes, target_mime = self._read_target(challenge.target_asset_url)
 
@@ -448,9 +431,9 @@ class PiAIPipeline:
             raise _PipelineFailure("artifact")
         return workspace
 
-    def _publish(self, attempt: GenerationAttempt, staged_path: Path) -> PublishedArtifact:
+    def _publish(self, attempt: GenerationAttempt, provider_path: str) -> PublishedArtifact:
         try:
-            published = self._artifact_store.publish(attempt, staged_path)
+            published = self._artifact_store.publish(attempt, provider_path)
         except Exception:
             raise _PipelineFailure("artifact") from None
         if (

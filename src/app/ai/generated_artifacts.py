@@ -53,6 +53,15 @@ ImageMetadata = PNGMetadata
 
 
 @dataclass(frozen=True, slots=True)
+class ArtifactWorkspace:
+    """Server-owned workspace and fixed relative output path for one attempt."""
+
+    workspace: Path
+    relative_output_path: str
+    staged_path: Path
+
+
+@dataclass(frozen=True, slots=True)
 class PublishedArtifact:
     """The persisted domain artifact plus its server-owned filesystem path."""
 
@@ -146,7 +155,17 @@ class GeneratedArtifactStore:
             return output_dir / PROVIDER_OUTPUT_PATH.name
 
     prepare_attempt = prepare
-    prepare_workspace = prepare
+
+    def prepare_workspace(self, attempt: GenerationAttempt) -> ArtifactWorkspace:
+        """Prepare and describe the fixed provider destination for a pipeline."""
+
+        staged_path = self.prepare(attempt)
+        workspace = self.workspace_for(attempt)
+        return ArtifactWorkspace(
+            workspace=workspace,
+            relative_output_path=PROVIDER_OUTPUT_PATH.as_posix(),
+            staged_path=staged_path,
+        )
 
     def publish(
         self,
@@ -212,6 +231,15 @@ class GeneratedArtifactStore:
             return data
 
     read_published = read_public
+
+    def read(self, published: PublishedArtifact) -> bytes:
+        """Read a publication returned by this store after containment checks."""
+
+        if not isinstance(published, PublishedArtifact):
+            raise TypeError("published must be a PublishedArtifact")
+        with self._lock:
+            data, _ = self._read_png_file(published.final_path, self.published_root)
+            return data
 
     def discard(self, attempt: GenerationAttempt) -> None:
         """Remove only this attempt's workspace and published artifact.
@@ -656,6 +684,7 @@ def _parse_png(data: bytes, max_bytes: int, max_width: int, max_height: int) -> 
 
 __all__ = [
     "ArtifactPublication",
+    "ArtifactWorkspace",
     "ArtifactSecurityError",
     "ArtifactStoreError",
     "ArtifactValidationError",
