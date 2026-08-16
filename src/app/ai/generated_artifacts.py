@@ -7,6 +7,7 @@ and browser URL from the server-owned attempt identity.
 
 from __future__ import annotations
 
+import errno
 import os
 import threading
 import uuid
@@ -309,51 +310,51 @@ class GeneratedArtifactStore:
         Input is a finite iterable of durable artifact URL strings. URLs outside
         this store's public prefix are ignored; URLs under the prefix must have
         the exact derived ``<round UUID>/<attempt UUID>.png`` shape. At most
-        ``max_entries`` filesystem entries across both roots may be inspected.
-        If that bound would be exceeded, this method raises
+        ``max_entries`` input references and, separately, filesystem entries
+        across both roots may be inspected. Exceeding either bound raises
         :class:`ArtifactReconciliationLimitError` before deleting anything.
 
-        Every canonical private attempt workspace is removed. A canonical public
-        token PNG is removed only when its exact derived URL is absent from the
-        input. Symlinked roots, round/token replacements, and special entries are
-        never followed or deleted. The returned counts describe this invocation;
-        callers own obtaining the durable URL snapshot and deciding whether a
-        limit error should fail startup or be retried with a larger explicit
-        bound. This primitive performs no database or FastAPI lifecycle work.
+        Every removable canonical private attempt workspace is cleaned. A
+        canonical public token PNG is removed only when its exact derived URL is
+        absent from the input. Scanning pins no-follow directory descriptors and
+        removal uses names relative to those descriptors, so pathname ancestor
+        swaps cannot redirect work outside the opened roots. Symlinks and special
+        entries are never followed. The returned counts describe this invocation;
+        callers own obtaining a bounded durable URL snapshot and deciding whether
+        a limit error should fail startup. This primitive performs no database or
+        FastAPI lifecycle work.
         """
 
         bound = _positive_int(max_entries, "max_entries")
-        references = _validated_referenced_paths(referenced_urls, self.public_prefix)
+        references = _validated_referenced_paths(
+            referenced_urls,
+            self.public_prefix,
+            max_references=bound,
+        )
         with self._lock:
             scan = _ReconciliationScan(bound)
-            private_plans = _plan_private_reconciliation(self.private_root, scan)
-            public_plans, retained = _plan_public_reconciliation(
-                self.published_root,
-                references,
-                scan,
-            )
+            private_root_fd = None
+            public_root_fd = None
+            try:
+                private_root_fd = _open_pinned_directory(self.private_root)
+                public_root_fd = _open_pinned_directory(self.published_root)
+                private_plans = _plan_private_reconciliation(private_root_fd, scan)
+                public_plans, retained = _plan_public_reconciliation(
+                    public_root_fd,
+                    references,
+                    scan,
+                )
 
-            removed_private = 0
-            for workspace, descendants in private_plans:
-                for path in descendants:
-                    _remove_reconciliation_entry(path, self.private_root)
-                if _remove_reconciliation_entry(workspace, self.private_root):
-                    removed_private += 1
-                else:
-                    scan.skip()
-                if _cleanup_path_is_safe(workspace.parent, self.private_root):
-                    _remove_empty_owned_dir(workspace.parent, self.private_root)
-
-            removed_public = 0
-            for path in public_plans:
-                if _cleanup_path_is_safe(path, self.published_root):
-                    _remove_owned_file(path)
-                    if not _path_exists(path):
-                        removed_public += 1
-                else:
-                    scan.skip()
-                if _cleanup_path_is_safe(path.parent, self.published_root):
-                    _remove_empty_owned_dir(path.parent, self.published_root)
+                removed_private = sum(
+                    _remove_planned_workspace(private_root_fd, plan, scan) for plan in private_plans
+                )
+                removed_public = sum(
+                    _remove_planned_public_artifact(public_root_fd, plan, scan)
+                    for plan in public_plans
+                )
+            finally:
+                _close_descriptor(private_root_fd)
+                _close_descriptor(public_root_fd)
 
             return ArtifactReconciliation(
                 inspected_entries=scan.inspected,
@@ -718,6 +719,8 @@ class _ReconciliationScan:
 def _validated_referenced_paths(
     referenced_urls: Iterable[str],
     public_prefix: str,
+    *,
+    max_references: int,
 ) -> set[tuple[str, str]]:
     if isinstance(referenced_urls, (str, bytes)):
         raise TypeError("referenced_urls must be an iterable of URL strings")
@@ -727,7 +730,11 @@ def _validated_referenced_paths(
     except TypeError as error:
         raise TypeError("referenced_urls must be an iterable of URL strings") from error
     prefix = f"{public_prefix}/"
-    for value in values:
+    for count, value in enumerate(values, start=1):
+        if count > max_references:
+            raise ArtifactReconciliationLimitError(
+                "artifact reconciliation exceeds the durable-reference bound"
+            )
         if type(value) is not str or not value:
             raise ValueError("referenced artifact URLs must be non-empty strings")
         parsed = urlsplit(value)
@@ -746,105 +753,368 @@ def _validated_referenced_paths(
     return references
 
 
+@dataclass(frozen=True, slots=True)
+class _PlannedNode:
+    name: str
+    identity: tuple[int, int, int]
+    children: tuple[_PlannedNode, ...] | None
+
+
+@dataclass(frozen=True, slots=True)
+class _PlannedWorkspace:
+    round_name: str
+    round_identity: tuple[int, int, int]
+    workspace: _PlannedNode
+
+
+@dataclass(frozen=True, slots=True)
+class _PlannedPublicArtifact:
+    round_name: str
+    round_identity: tuple[int, int, int]
+    artifact: _PlannedNode
+
+
 def _plan_private_reconciliation(
-    root: Path,
+    root_fd: int | None,
     scan: _ReconciliationScan,
-) -> list[tuple[Path, list[Path]]]:
-    plans: list[tuple[Path, list[Path]]] = []
-    if not _safe_directory_exists(root):
+) -> list[_PlannedWorkspace]:
+    plans: list[_PlannedWorkspace] = []
+    if root_fd is None:
         return plans
-    with os.scandir(root) as rounds:
+    with os.scandir(root_fd) as rounds:
         for round_entry in rounds:
             scan.inspect()
-            round_path = Path(round_entry.path)
-            if not _is_canonical_uuid(round_entry.name) or not _safe_directory_exists(round_path):
+            round_state = _entry_state(root_fd, round_entry.name)
+            if (
+                round_state is None
+                or not _is_canonical_uuid(round_entry.name)
+                or not S_ISDIR(round_state.st_mode)
+            ):
                 scan.skip()
                 continue
-            with os.scandir(round_path) as attempts:
-                for attempt_entry in attempts:
-                    scan.inspect()
-                    workspace = Path(attempt_entry.path)
-                    if not _is_canonical_uuid(attempt_entry.name) or not _safe_directory_exists(
-                        workspace
-                    ):
-                        scan.skip()
-                        continue
-                    descendants: list[Path] = []
-                    _plan_workspace_descendants(workspace, descendants, scan)
-                    plans.append((workspace, descendants))
+            round_identity = _entry_identity(round_state)
+            round_fd = _open_matching_directory(root_fd, round_entry.name, round_identity)
+            if round_fd is None:
+                scan.skip()
+                continue
+            try:
+                with os.scandir(round_fd) as attempts:
+                    for attempt_entry in attempts:
+                        scan.inspect()
+                        attempt_state = _entry_state(round_fd, attempt_entry.name)
+                        if (
+                            attempt_state is None
+                            or not _is_canonical_uuid(attempt_entry.name)
+                            or not S_ISDIR(attempt_state.st_mode)
+                        ):
+                            scan.skip()
+                            continue
+                        attempt_identity = _entry_identity(attempt_state)
+                        workspace_fd = _open_matching_directory(
+                            round_fd,
+                            attempt_entry.name,
+                            attempt_identity,
+                        )
+                        if workspace_fd is None:
+                            scan.skip()
+                            continue
+                        try:
+                            descendants = _plan_workspace_descendants(workspace_fd, scan)
+                        finally:
+                            os.close(workspace_fd)
+                        plans.append(
+                            _PlannedWorkspace(
+                                round_name=round_entry.name,
+                                round_identity=round_identity,
+                                workspace=_PlannedNode(
+                                    name=attempt_entry.name,
+                                    identity=attempt_identity,
+                                    children=descendants,
+                                ),
+                            )
+                        )
+            finally:
+                os.close(round_fd)
     return plans
 
 
 def _plan_workspace_descendants(
-    directory: Path,
-    descendants: list[Path],
+    directory_fd: int,
     scan: _ReconciliationScan,
-) -> None:
-    with os.scandir(directory) as entries:
+) -> tuple[_PlannedNode, ...]:
+    descendants: list[_PlannedNode] = []
+    with os.scandir(directory_fd) as entries:
         for entry in entries:
             scan.inspect()
-            path = Path(entry.path)
-            try:
-                state = os.lstat(path)
-            except FileNotFoundError:
+            state = _entry_state(directory_fd, entry.name)
+            if state is None:
                 continue
-            if S_ISDIR(state.st_mode) and not S_ISLNK(state.st_mode):
-                _plan_workspace_descendants(path, descendants, scan)
-                descendants.append(path)
-            elif S_ISREG(state.st_mode) or S_ISLNK(state.st_mode):
-                descendants.append(path)
+            identity = _entry_identity(state)
+            if S_ISDIR(state.st_mode):
+                child_fd = _open_matching_directory(directory_fd, entry.name, identity)
+                if child_fd is None:
+                    scan.skip()
+                    continue
+                try:
+                    children = _plan_workspace_descendants(child_fd, scan)
+                finally:
+                    os.close(child_fd)
+                descendants.append(_PlannedNode(entry.name, identity, children))
+            elif S_ISREG(state.st_mode):
+                descendants.append(_PlannedNode(entry.name, identity, None))
             else:
                 scan.skip()
+    return tuple(descendants)
 
 
 def _plan_public_reconciliation(
-    root: Path,
+    root_fd: int | None,
     references: set[tuple[str, str]],
     scan: _ReconciliationScan,
-) -> tuple[list[Path], int]:
-    plans: list[Path] = []
+) -> tuple[list[_PlannedPublicArtifact], int]:
+    plans: list[_PlannedPublicArtifact] = []
     retained = 0
-    if not _safe_directory_exists(root):
+    if root_fd is None:
         return plans, retained
-    with os.scandir(root) as rounds:
+    with os.scandir(root_fd) as rounds:
         for round_entry in rounds:
             scan.inspect()
-            round_path = Path(round_entry.path)
-            if not _is_canonical_uuid(round_entry.name) or not _safe_directory_exists(round_path):
+            round_state = _entry_state(root_fd, round_entry.name)
+            if (
+                round_state is None
+                or not _is_canonical_uuid(round_entry.name)
+                or not S_ISDIR(round_state.st_mode)
+            ):
                 scan.skip()
                 continue
-            with os.scandir(round_path) as artifacts:
-                for artifact_entry in artifacts:
-                    scan.inspect()
-                    artifact_path = Path(artifact_entry.path)
-                    token_name = artifact_entry.name.removesuffix(".png")
-                    try:
-                        state = os.lstat(artifact_path)
-                    except FileNotFoundError:
-                        continue
-                    canonical = (
-                        artifact_entry.name.endswith(".png")
-                        and _is_canonical_uuid(token_name)
-                        and S_ISREG(state.st_mode)
-                        and not S_ISLNK(state.st_mode)
-                    )
-                    if not canonical:
-                        scan.skip()
-                        continue
-                    key = (round_entry.name, artifact_entry.name)
-                    if key in references:
-                        retained += 1
-                    else:
-                        plans.append(artifact_path)
+            round_identity = _entry_identity(round_state)
+            round_fd = _open_matching_directory(root_fd, round_entry.name, round_identity)
+            if round_fd is None:
+                scan.skip()
+                continue
+            try:
+                with os.scandir(round_fd) as artifacts:
+                    for artifact_entry in artifacts:
+                        scan.inspect()
+                        state = _entry_state(round_fd, artifact_entry.name)
+                        token_name = artifact_entry.name.removesuffix(".png")
+                        canonical = (
+                            state is not None
+                            and artifact_entry.name.endswith(".png")
+                            and _is_canonical_uuid(token_name)
+                            and S_ISREG(state.st_mode)
+                        )
+                        if not canonical:
+                            scan.skip()
+                            continue
+                        key = (round_entry.name, artifact_entry.name)
+                        if key in references:
+                            retained += 1
+                        else:
+                            assert state is not None
+                            plans.append(
+                                _PlannedPublicArtifact(
+                                    round_name=round_entry.name,
+                                    round_identity=round_identity,
+                                    artifact=_PlannedNode(
+                                        artifact_entry.name,
+                                        _entry_identity(state),
+                                        None,
+                                    ),
+                                )
+                            )
+            finally:
+                os.close(round_fd)
     return plans, retained
 
 
-def _safe_directory_exists(path: Path) -> bool:
+def _open_pinned_directory(path: Path) -> int | None:
+    """Open an absolute directory one no-follow component at a time."""
+
+    if not path.is_absolute():
+        raise ArtifactSecurityError(f"owned root must be absolute: {path}")
+    flags = _directory_open_flags()
+    descriptor: int | None = None
     try:
-        state = os.lstat(path)
+        descriptor = os.open(path.anchor, flags)
+        for component in path.parts[1:]:
+            child = os.open(component, flags, dir_fd=descriptor)
+            os.close(descriptor)
+            descriptor = child
+        return descriptor
+    except OSError as error:
+        _close_descriptor(descriptor)
+        if error.errno in {errno.ENOENT, errno.ENOTDIR, errno.ELOOP}:
+            return None
+        raise
+
+
+def _directory_open_flags() -> int:
+    directory = getattr(os, "O_DIRECTORY", None)
+    no_follow = getattr(os, "O_NOFOLLOW", None)
+    if directory is None or no_follow is None:
+        raise ArtifactSecurityError("artifact reconciliation requires no-follow directory opens")
+    return os.O_RDONLY | directory | no_follow | getattr(os, "O_CLOEXEC", 0)
+
+
+def _open_matching_directory(
+    parent_fd: int,
+    name: str,
+    identity: tuple[int, int, int],
+) -> int | None:
+    if not _entry_matches(parent_fd, name, identity, directory=True):
+        return None
+    try:
+        descriptor = os.open(name, _directory_open_flags(), dir_fd=parent_fd)
+    except OSError as error:
+        if error.errno in {errno.ENOENT, errno.ENOTDIR, errno.ELOOP}:
+            return None
+        raise
+    if _entry_identity(os.fstat(descriptor)) != identity:
+        os.close(descriptor)
+        return None
+    return descriptor
+
+
+def _entry_state(parent_fd: int, name: str) -> os.stat_result | None:
+    try:
+        return os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
     except FileNotFoundError:
+        return None
+
+
+def _entry_identity(state: os.stat_result) -> tuple[int, int, int]:
+    return state.st_dev, state.st_ino, state.st_mode
+
+
+def _entry_matches(
+    parent_fd: int,
+    name: str,
+    identity: tuple[int, int, int],
+    *,
+    directory: bool,
+) -> bool:
+    """Match a planned inode; the pinned parent FD, not this check, provides containment."""
+
+    state = _entry_state(parent_fd, name)
+    if state is None or _entry_identity(state) != identity:
         return False
-    return S_ISDIR(state.st_mode) and not S_ISLNK(state.st_mode)
+    return S_ISDIR(state.st_mode) if directory else S_ISREG(state.st_mode)
+
+
+def _remove_planned_workspace(
+    root_fd: int | None,
+    plan: _PlannedWorkspace,
+    scan: _ReconciliationScan,
+) -> int:
+    if root_fd is None:
+        return 0
+    round_fd = _open_matching_directory(root_fd, plan.round_name, plan.round_identity)
+    if round_fd is None:
+        scan.skip()
+        return 0
+    try:
+        workspace_fd = _open_matching_directory(
+            round_fd,
+            plan.workspace.name,
+            plan.workspace.identity,
+        )
+        if workspace_fd is None:
+            scan.skip()
+            return 0
+        try:
+            assert plan.workspace.children is not None
+            _remove_planned_descendants(workspace_fd, plan.workspace.children, scan)
+        finally:
+            os.close(workspace_fd)
+        removed = _rmdir_planned(round_fd, plan.workspace)
+        if not removed:
+            scan.skip()
+            return 0
+    finally:
+        os.close(round_fd)
+    _rmdir_planned_name(root_fd, plan.round_name, plan.round_identity)
+    return 1
+
+
+def _remove_planned_descendants(
+    parent_fd: int,
+    nodes: tuple[_PlannedNode, ...],
+    scan: _ReconciliationScan,
+) -> None:
+    for node in nodes:
+        if node.children is None:
+            if not _unlink_planned(parent_fd, node):
+                scan.skip()
+            continue
+        child_fd = _open_matching_directory(parent_fd, node.name, node.identity)
+        if child_fd is None:
+            scan.skip()
+            continue
+        try:
+            _remove_planned_descendants(child_fd, node.children, scan)
+        finally:
+            os.close(child_fd)
+        if not _rmdir_planned(parent_fd, node):
+            scan.skip()
+
+
+def _remove_planned_public_artifact(
+    root_fd: int | None,
+    plan: _PlannedPublicArtifact,
+    scan: _ReconciliationScan,
+) -> int:
+    if root_fd is None:
+        return 0
+    round_fd = _open_matching_directory(root_fd, plan.round_name, plan.round_identity)
+    if round_fd is None:
+        scan.skip()
+        return 0
+    try:
+        if not _unlink_planned(round_fd, plan.artifact):
+            scan.skip()
+            return 0
+    finally:
+        os.close(round_fd)
+    _rmdir_planned_name(root_fd, plan.round_name, plan.round_identity)
+    return 1
+
+
+def _unlink_planned(parent_fd: int, node: _PlannedNode) -> bool:
+    if not _entry_matches(parent_fd, node.name, node.identity, directory=False):
+        return _entry_state(parent_fd, node.name) is None
+    try:
+        os.unlink(node.name, dir_fd=parent_fd)
+    except FileNotFoundError:
+        return True
+    except OSError:
+        return False
+    return True
+
+
+def _rmdir_planned(parent_fd: int, node: _PlannedNode) -> bool:
+    return _rmdir_planned_name(parent_fd, node.name, node.identity)
+
+
+def _rmdir_planned_name(
+    parent_fd: int,
+    name: str,
+    identity: tuple[int, int, int],
+) -> bool:
+    if not _entry_matches(parent_fd, name, identity, directory=True):
+        return _entry_state(parent_fd, name) is None
+    try:
+        os.rmdir(name, dir_fd=parent_fd)
+    except FileNotFoundError:
+        return True
+    except OSError:
+        return False
+    return True
+
+
+def _close_descriptor(descriptor: int | None) -> None:
+    if descriptor is not None:
+        os.close(descriptor)
 
 
 def _is_canonical_uuid(value: str) -> bool:
@@ -852,33 +1122,6 @@ def _is_canonical_uuid(value: str) -> bool:
         return _canonical_uuid(value, "filesystem entry") == value
     except ValueError:
         return False
-
-
-def _remove_reconciliation_entry(path: Path, owned_root: Path) -> bool:
-    """Remove one pre-scanned entry only if every component is still owned-safe."""
-
-    if not _cleanup_path_is_safe(path, owned_root):
-        return False
-    try:
-        state = os.lstat(path)
-    except FileNotFoundError:
-        return True
-    try:
-        if S_ISREG(state.st_mode):
-            path.unlink()
-        elif S_ISDIR(state.st_mode):
-            path.rmdir()
-    except OSError:
-        return False
-    return not _path_exists(path)
-
-
-def _path_exists(path: Path) -> bool:
-    try:
-        os.lstat(path)
-    except FileNotFoundError:
-        return False
-    return True
 
 
 def _parse_png(data: bytes, max_bytes: int, max_width: int, max_height: int) -> PNGMetadata:

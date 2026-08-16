@@ -25,6 +25,10 @@ class RoundNotFoundError(LookupError):
     """Raised when a requested round ID is not stored."""
 
 
+class RoundRepositoryLimitError(ValueError):
+    """Raised when a bounded durable round snapshot would exceed its limit."""
+
+
 class ShelfDbRoundRepository:
     """Store complete ``RoundRecord.dict()`` mappings in ShelfDB."""
 
@@ -97,21 +101,23 @@ class ShelfDbRoundRepository:
             _require_expected_snapshot(current, expected_snapshot)
             shelf.put(validated.id, validated.dict())
 
-    def list_generated_artifact_urls(self) -> list[str]:
-        """Return every durable generated-artifact URL for startup reconciliation."""
+    def list_generated_artifact_urls(self, *, max_records: int) -> list[str]:
+        """Return a bounded snapshot of every durable generated-artifact URL."""
 
+        if type(max_records) is not int or max_records <= 0:
+            raise ValueError("max_records must be a positive integer")
+        references: set[str] = set()
         with self._db.transaction(write=False) as transaction:
-            records = [
-                _reconstruct(item.value, "stored round")
-                for item in transaction.shelf(_ROUNDS_SHELF).items()
-            ]
-        return sorted(
-            {
-                record.generated_artifact.url
-                for record in records
-                if record.generated_artifact is not None
-            }
-        )
+            items = transaction.shelf(_ROUNDS_SHELF).items()
+            for count, item in enumerate(items, start=1):
+                if count > max_records:
+                    raise RoundRepositoryLimitError(
+                        "durable round snapshot exceeds the configured record bound"
+                    )
+                record = _reconstruct(item.value, "stored round")
+                if record.generated_artifact is not None:
+                    references.add(record.generated_artifact.url)
+        return sorted(references)
 
     def list_completed(self, level: LevelGroup | None = None) -> list[RoundRecord]:
         """Return completed rounds ordered by completion timestamp and ID."""
@@ -164,6 +170,7 @@ def _reconstruct(payload: Any, round_id: str) -> RoundRecord:
 __all__ = [
     "RoundConflictError",
     "RoundNotFoundError",
+    "RoundRepositoryLimitError",
     "RoundSnapshotConflictError",
     "ShelfDbRoundRepository",
 ]

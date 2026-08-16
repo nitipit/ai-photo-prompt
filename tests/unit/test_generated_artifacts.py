@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import errno
 import os
 import struct
 import zlib
@@ -382,6 +383,185 @@ def test_reconcile_limit_fails_before_mutation(tmp_path: Path) -> None:
 
     assert store.workspace_for(current).exists()
     assert published.final_path.exists()
+
+
+def test_reconcile_reference_limit_fails_before_filesystem_mutation(tmp_path: Path) -> None:
+    store, current, destination = prepared_store(tmp_path)
+    destination.write_bytes(png())
+    published = store.publish(current, PROVIDER_OUTPUT_PATH)
+    references = [
+        f"/generated/{uuid4()}/{uuid4()}.png",
+        f"/generated/{uuid4()}/{uuid4()}.png",
+    ]
+
+    with pytest.raises(ArtifactReconciliationLimitError, match="durable-reference bound"):
+        store.reconcile(references, max_entries=1)
+
+    assert store.workspace_for(current).exists()
+    assert published.final_path.exists()
+
+
+def test_reconcile_closes_private_root_when_public_root_open_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = GeneratedArtifactStore(tmp_path / "private", tmp_path / "published")
+    private_fd = os.open(tmp_path, os.O_RDONLY | os.O_DIRECTORY)
+    calls = 0
+
+    def fail_second_root_open(path: Path) -> int:
+        nonlocal calls
+        del path
+        calls += 1
+        if calls == 1:
+            return private_fd
+        raise PermissionError("public root denied")
+
+    try:
+        monkeypatch.setattr(artifact_module, "_open_pinned_directory", fail_second_root_open)
+        with pytest.raises(PermissionError, match="public root denied"):
+            store.reconcile([])
+
+        with pytest.raises(OSError) as closed:
+            os.fstat(private_fd)
+        assert closed.value.errno == errno.EBADF
+    finally:
+        try:
+            os.close(private_fd)
+        except OSError:
+            pass
+
+
+def test_reconcile_missing_or_symlink_roots_never_follows_them(tmp_path: Path) -> None:
+    private_root = tmp_path / "private"
+    public_root = tmp_path / "published"
+    store = GeneratedArtifactStore(private_root, public_root)
+
+    missing = store.reconcile([])
+
+    assert missing.inspected_entries == 0
+    assert not private_root.exists()
+    assert not public_root.exists()
+
+    outside_private = tmp_path / "outside-private"
+    outside_public = tmp_path / "outside-public"
+    outside_private.mkdir()
+    outside_public.mkdir()
+    private_sentinel = outside_private / "sentinel.txt"
+    public_sentinel = outside_public / "sentinel.txt"
+    private_sentinel.write_text("keep private", encoding="utf-8")
+    public_sentinel.write_text("keep public", encoding="utf-8")
+    private_root.symlink_to(outside_private, target_is_directory=True)
+    public_root.symlink_to(outside_public, target_is_directory=True)
+
+    replaced = store.reconcile([])
+
+    assert replaced.inspected_entries == 0
+    assert private_sentinel.read_text(encoding="utf-8") == "keep private"
+    assert public_sentinel.read_text(encoding="utf-8") == "keep public"
+
+
+def test_reconcile_postcheck_round_swap_cannot_redirect_unlink(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    for index in range(20):
+        iteration = tmp_path / str(index)
+        store, current, destination = prepared_store(iteration)
+        destination.write_bytes(png())
+        published = store.publish(current, PROVIDER_OUTPUT_PATH)
+        store.cleanup_workspace(current)
+        round_directory = published.final_path.parent
+        moved_round = iteration / "moved-round"
+        outside_round = iteration / "outside-round"
+        outside_round.mkdir()
+        sentinel = outside_round / published.final_path.name
+        sentinel.write_bytes(b"outside sentinel")
+        original_entry_matches = artifact_module._entry_matches
+        swapped = False
+
+        def swap_after_artifact_check(
+            parent_fd,
+            name,
+            identity,
+            *,
+            directory,
+            original=original_entry_matches,
+            artifact_name=published.final_path.name,
+            owned_round=round_directory,
+            moved=moved_round,
+            outside=outside_round,
+        ):
+            nonlocal swapped
+            matched = original(parent_fd, name, identity, directory=directory)
+            if matched and not directory and name == artifact_name and not swapped:
+                owned_round.rename(moved)
+                owned_round.symlink_to(outside, target_is_directory=True)
+                swapped = True
+            return matched
+
+        with monkeypatch.context() as patch:
+            patch.setattr(artifact_module, "_entry_matches", swap_after_artifact_check)
+            result = store.reconcile([])
+
+        assert swapped is True
+        assert result.removed_public_artifacts == 1
+        assert sentinel.read_bytes() == b"outside sentinel"
+        assert not (moved_round / published.final_path.name).exists()
+
+
+@pytest.mark.parametrize("replacement", ["workspace", "round-ancestor"])
+def test_reconcile_mid_recursion_swap_cannot_redirect_scan_or_removal(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    replacement: str,
+) -> None:
+    for index in range(20):
+        iteration = tmp_path / replacement / str(index)
+        store, current, destination = prepared_store(iteration)
+        destination.write_bytes(png())
+        workspace = store.workspace_for(current)
+        round_directory = workspace.parent
+        outside = iteration / "outside"
+        if replacement == "workspace":
+            moved = iteration / "moved-workspace"
+            sentinel = outside / PROVIDER_OUTPUT_PATH
+        else:
+            moved = iteration / "moved-round"
+            sentinel = outside / current.attempt_token / PROVIDER_OUTPUT_PATH
+        sentinel.parent.mkdir(parents=True)
+        sentinel.write_bytes(b"outside sentinel")
+        original_entry_state = artifact_module._entry_state
+        swapped = False
+
+        def swap_during_recursive_scan(
+            parent_fd,
+            name,
+            original=original_entry_state,
+            owned_workspace=workspace,
+            owned_round=round_directory,
+            moved_entry=moved,
+            outside_entry=outside,
+        ):
+            nonlocal swapped
+            if name == PROVIDER_OUTPUT_PATH.name and not swapped:
+                if replacement == "workspace":
+                    owned_workspace.rename(moved_entry)
+                    owned_workspace.symlink_to(outside_entry, target_is_directory=True)
+                else:
+                    owned_round.rename(moved_entry)
+                    owned_round.symlink_to(outside_entry, target_is_directory=True)
+                swapped = True
+            return original(parent_fd, name)
+
+        with monkeypatch.context() as patch:
+            patch.setattr(artifact_module, "_entry_state", swap_during_recursive_scan)
+            result = store.reconcile([])
+
+        assert swapped is True
+        assert result.removed_private_workspaces == 0
+        assert result.skipped_unsafe_entries >= 1
+        assert sentinel.read_bytes() == b"outside sentinel"
 
 
 def test_copy_failure_leaves_no_partial_final(

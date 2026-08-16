@@ -15,6 +15,7 @@ from .claims import (
 from .rounds import (
     RoundConflictError,
     RoundNotFoundError,
+    RoundRepositoryLimitError,
     RoundSnapshotConflictError,
     ShelfDbRoundRepository,
 )
@@ -27,6 +28,7 @@ __all__ = [
     "RoundConflictError",
     "RoundNotClaimableError",
     "RoundNotFoundError",
+    "RoundRepositoryLimitError",
     "RoundSnapshotConflictError",
     "ShelfDbChallengeRepository",
     "ShelfDbGenerationClaims",

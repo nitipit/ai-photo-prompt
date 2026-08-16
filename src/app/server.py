@@ -68,6 +68,8 @@ from .web import (
     render_result,
 )
 
+_DEFAULT_ARTIFACT_RECONCILIATION_MAX_ENTRIES = 10_000
+
 
 @asynccontextmanager
 async def lifespan(application: FastAPI) -> AsyncIterator[None]:
@@ -100,13 +102,15 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
         round_repository = ShelfDbRoundRepository(db)
         artifact_reconciliation = None
         if artifact_store is not None:
-            referenced_urls = await asyncio.to_thread(round_repository.list_generated_artifact_urls)
+            reconciliation_limit = _artifact_reconciliation_limit(application)
+            referenced_urls = await asyncio.to_thread(
+                round_repository.list_generated_artifact_urls,
+                max_records=reconciliation_limit,
+            )
             artifact_reconciliation = await asyncio.to_thread(
                 artifact_store.reconcile,
                 referenced_urls,
-                max_entries=int(
-                    getattr(application.state, "artifact_reconciliation_max_entries", 10_000)
-                ),
+                max_entries=reconciliation_limit,
             )
         claim_lease_duration = timedelta(
             seconds=float(getattr(application.state, "claim_lease_seconds", 30.0))
@@ -164,6 +168,17 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
                 ):
                     if hasattr(application.state, name):
                         delattr(application.state, name)
+
+
+def _artifact_reconciliation_limit(application: FastAPI) -> int:
+    value = getattr(
+        application.state,
+        "artifact_reconciliation_max_entries",
+        _DEFAULT_ARTIFACT_RECONCILIATION_MAX_ENTRIES,
+    )
+    if type(value) is not int or value <= 0:
+        raise ValueError("artifact_reconciliation_max_entries must be a positive integer")
+    return value
 
 
 def _build_ai_pipeline(

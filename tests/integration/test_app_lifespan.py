@@ -32,6 +32,7 @@ from app.domain.models import (
 )
 from app.persistence import (
     ChallengeNotFoundError,
+    RoundRepositoryLimitError,
     ShelfDbChallengeRepository,
     ShelfDbGenerationClaims,
     ShelfDbRoundRepository,
@@ -140,6 +141,7 @@ def runtime_app(tmp_path: Path, materialized_catalog):
         "generated_root",
         "dist_root",
         "provider_timeout",
+        "artifact_reconciliation_max_entries",
     ):
         if hasattr(app.state, name):
             delattr(app.state, name)
@@ -314,6 +316,76 @@ def test_pi_startup_reconciles_staging_and_unreferenced_public_artifacts(
             client.get(f"/generated/{orphan.round_id}/{orphan.attempt_token}.png").status_code
             == 404
         )
+
+
+def test_pi_startup_custom_reference_limit_fails_before_artifact_deletion(
+    runtime_app,
+    tmp_path: Path,
+) -> None:
+    bridge = tmp_path / "codex-bridge.ts"
+    bridge.write_text("// startup presence check", encoding="utf-8")
+    private_root = tmp_path / "pi-rpc"
+    generated_root = tmp_path / "generated"
+    runtime_app.state.ai_provider = "pi"
+    runtime_app.state.pi_executable = sys.executable
+    runtime_app.state.pi_bridge_path = bridge
+    runtime_app.state.pi_workspace_root = private_root
+    runtime_app.state.generated_root = generated_root
+    runtime_app.state.dist_root = tmp_path / "dist"
+    runtime_app.state.artifact_reconciliation_max_entries = 1
+
+    store = GeneratedArtifactStore(private_root, generated_root)
+    orphan = GenerationAttempt(round_id=str(uuid4()), attempt_token=str(uuid4()))
+    workspace = store.prepare_workspace(orphan)
+    workspace.staged_path.write_bytes(_valid_png())
+    publication = store.publish(orphan, workspace.relative_output_path)
+
+    db = DB(str(runtime_app.state.db_path))
+    try:
+        repository = ShelfDbRoundRepository(db)
+        for _ in range(2):
+            repository.create(
+                RoundRecord(
+                    id=str(uuid4()),
+                    state=GameState.LEVEL_SELECTION,
+                    display_name="Bounded startup",
+                    created_at="2026-01-01T00:00:00+00:00",
+                    updated_at="2026-01-01T00:00:00+00:00",
+                )
+            )
+    finally:
+        db.close()
+
+    with pytest.raises(RoundRepositoryLimitError, match="record bound"):
+        with TestClient(runtime_app):
+            pass
+
+    assert workspace.workspace.exists()
+    assert publication.final_path.exists()
+    assert not hasattr(runtime_app.state, "artifact_reconciliation")
+
+
+@pytest.mark.parametrize("invalid_limit", [0, -1, True, "10"])
+def test_pi_startup_rejects_non_positive_or_untyped_reconciliation_limit(
+    runtime_app,
+    tmp_path: Path,
+    invalid_limit: object,
+) -> None:
+    bridge = tmp_path / "codex-bridge.ts"
+    bridge.write_text("// startup presence check", encoding="utf-8")
+    runtime_app.state.ai_provider = "pi"
+    runtime_app.state.pi_executable = sys.executable
+    runtime_app.state.pi_bridge_path = bridge
+    runtime_app.state.pi_workspace_root = tmp_path / "pi-rpc"
+    runtime_app.state.generated_root = tmp_path / "generated"
+    runtime_app.state.dist_root = tmp_path / "dist"
+    runtime_app.state.artifact_reconciliation_max_entries = invalid_limit
+
+    with pytest.raises(ValueError, match="must be a positive integer"):
+        with TestClient(runtime_app):
+            pass
+
+    assert not hasattr(runtime_app.state, "artifact_reconciliation")
 
 
 def test_missing_ai_provider_fails_without_opening_db(

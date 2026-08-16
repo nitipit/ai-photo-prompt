@@ -19,6 +19,7 @@ from app.domain.models import (
 from app.persistence import (
     RoundConflictError,
     RoundNotFoundError,
+    RoundRepositoryLimitError,
     RoundSnapshotConflictError,
     ShelfDbRoundRepository,
 )
@@ -153,26 +154,40 @@ def test_replace_is_a_full_replacement(repository: ShelfDbRoundRepository) -> No
 def test_generated_artifact_urls_include_all_durable_round_states(
     repository: ShelfDbRoundRepository,
 ) -> None:
-    first = make_round()
-    second = make_round()
-    shared_url = f"/generated/{first.id}/{uuid4()}.png"
-    first = RoundRecord(
-        **{
-            **first.dict(),
-            "generated_artifact": ImageArtifact(url=shared_url),
-        }
+    in_progress = make_round()
+    abandoned = make_round(disposition=TerminalDisposition.ABANDONED)
+    completed = make_round(
+        level=LevelGroup.P1_P3,
+        disposition=TerminalDisposition.COMPLETED,
+        completed_at="2026-01-01T00:00:01+00:00",
     )
-    second = RoundRecord(
-        **{
-            **second.dict(),
-            "generated_artifact": ImageArtifact(url=shared_url),
-        }
-    )
-    repository.create(first)
-    repository.create(second)
+    urls = {
+        f"/generated/{record.id}/{uuid4()}.png" for record in (in_progress, abandoned, completed)
+    }
+    for record, url in zip((in_progress, abandoned, completed), sorted(urls), strict=True):
+        repository.create(
+            RoundRecord(
+                **{
+                    **record.dict(),
+                    "generated_artifact": ImageArtifact(url=url),
+                }
+            )
+        )
     repository.create(make_round())
 
-    assert repository.list_generated_artifact_urls() == [shared_url]
+    assert repository.list_generated_artifact_urls(max_records=4) == sorted(urls)
+
+
+def test_generated_artifact_url_snapshot_is_bounded_while_iterating(
+    repository: ShelfDbRoundRepository,
+) -> None:
+    for _ in range(3):
+        repository.create(make_round())
+
+    with pytest.raises(RoundRepositoryLimitError, match="record bound"):
+        repository.list_generated_artifact_urls(max_records=2)
+    with pytest.raises(ValueError, match="positive integer"):
+        repository.list_generated_artifact_urls(max_records=0)
 
 
 def test_completed_listing_filters_level_and_orders_by_completion_then_id(
