@@ -48,14 +48,23 @@ class FinalCASBoundary:
         self.final_started = Event()
         self.allow_final = Event()
 
-    def claim(self, round_id, claim, now):
-        return self.claims.claim(round_id, claim, now)
+    @property
+    def lease_duration(self):
+        return self.claims.lease_duration
+
+    def acquire_fresh(self, round_id, attempt_token, owner_instance, requested_at):
+        return self.claims.acquire_fresh(
+            round_id,
+            attempt_token,
+            owner_instance,
+            requested_at,
+        )
 
     def get(self, round_id):
         return self.claims.get(round_id)
 
-    def renew(self, round_id, attempt_token, lease_expires_at, now):
-        return self.claims.renew(round_id, attempt_token, lease_expires_at, now)
+    def renew_fresh(self, round_id, attempt_token):
+        return self.claims.renew_fresh(round_id, attempt_token)
 
     def release_matching(self, round_id, attempt_token):
         return self.claims.release_matching(round_id, attempt_token)
@@ -63,15 +72,14 @@ class FinalCASBoundary:
     def replace_round_and_clear_claim(self, record, *, expected=None):
         return self.claims.replace_round_and_clear_claim(record, expected=expected)
 
-    def replace_round_and_release(self, record, attempt_token, now, *, expected=None):
+    def replace_round_and_release_fresh(self, record, attempt_token, *, expected=None):
         self.final_started.set()
         self.allow_final.wait(timeout=5)
         if self.failure is not None:
             raise self.failure
-        return self.claims.replace_round_and_release(
+        return self.claims.replace_round_and_release_fresh(
             record,
             attempt_token,
-            now,
             expected=expected,
         )
 
@@ -224,8 +232,8 @@ def lifecycle(tmp_path: Path):
     db = DB(str(tmp_path / "lifecycle-db"))
     try:
         repository = ShelfDbRoundRepository(db)
-        claims = ShelfDbGenerationClaims(db)
         clock = MutableClock()
+        claims = ShelfDbGenerationClaims(db, clock, timedelta(seconds=30))
         store = GeneratedArtifactStore(tmp_path / "private", tmp_path / "published")
         pipeline = real_pipeline(tmp_path, store)
         yield repository, claims, clock, store, pipeline
