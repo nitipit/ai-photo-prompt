@@ -20,7 +20,16 @@ from app.ai.protocols import GenerationAttempt
 from app.ai.results import AIPipelineResult
 from app.config import AI_PROVIDER_ENV, DEFAULT_GENERATED_ROOT
 from app.content.repository import CatalogValidationError, ChallengeCatalog
-from app.domain.models import ChallengeSpec, LevelGroup, PromptSubmissionReason
+from app.domain.models import (
+    ChallengeSpec,
+    GameState,
+    ImageMatchEvaluation,
+    LevelGroup,
+    PromptEvaluation,
+    PromptSubmissionReason,
+    RoundRecord,
+    ScoreResult,
+)
 from app.persistence import (
     ChallengeNotFoundError,
     ShelfDbChallengeRepository,
@@ -224,6 +233,87 @@ def test_pi_provider_is_explicit_and_never_falls_back_to_fake(
         assert response.status_code == 200
         assert response.headers["content-type"] == "image/png"
         assert response.content == _valid_png()
+
+
+def test_pi_startup_reconciles_staging_and_unreferenced_public_artifacts(
+    runtime_app,
+    tmp_path: Path,
+) -> None:
+    bridge = tmp_path / "codex-bridge.ts"
+    bridge.write_text("// startup presence check", encoding="utf-8")
+    private_root = tmp_path / "pi-rpc"
+    generated_root = tmp_path / "generated"
+    runtime_app.state.ai_provider = "pi"
+    runtime_app.state.pi_executable = sys.executable
+    runtime_app.state.pi_bridge_path = bridge
+    runtime_app.state.pi_workspace_root = private_root
+    runtime_app.state.generated_root = generated_root
+    runtime_app.state.dist_root = tmp_path / "dist"
+
+    store = GeneratedArtifactStore(private_root, generated_root)
+    referenced = GenerationAttempt(round_id=str(uuid4()), attempt_token=str(uuid4()))
+    orphan = GenerationAttempt(round_id=str(uuid4()), attempt_token=str(uuid4()))
+    referenced_workspace = store.prepare_workspace(referenced)
+    referenced_workspace.staged_path.write_bytes(_valid_png())
+    referenced_publication = store.publish(
+        referenced,
+        referenced_workspace.relative_output_path,
+    )
+    orphan_workspace = store.prepare_workspace(orphan)
+    orphan_workspace.staged_path.write_bytes(_valid_png())
+    orphan_publication = store.publish(orphan, orphan_workspace.relative_output_path)
+
+    db = DB(str(runtime_app.state.db_path))
+    try:
+        ShelfDbRoundRepository(db).create(
+            RoundRecord(
+                id=referenced.round_id,
+                state=GameState.GENERATED_REVEAL,
+                display_name="Reconcile",
+                level=LevelGroup.P1_P3,
+                challenge_id="p1-p3-0",
+                prompt="prompt",
+                prompt_submission_reason=PromptSubmissionReason.MANUAL,
+                generated_artifact=referenced_publication.artifact,
+                prompt_evaluation=PromptEvaluation(
+                    clarity=80,
+                    specificity=80,
+                    relationship=80,
+                    consistency=80,
+                ),
+                image_evaluation=ImageMatchEvaluation(
+                    core_concept=80,
+                    supporting_details=80,
+                    scene_coherence=80,
+                ),
+                score=ScoreResult(prompt_score=80, image_score=80, total_score=80),
+                feedback=["feedback one", "feedback two"],
+                created_at="2026-01-01T00:00:00+00:00",
+                updated_at="2026-01-01T00:00:00+00:00",
+                generated_at="2026-01-01T00:00:00+00:00",
+                reveal_deadline="2026-01-01T00:00:05+00:00",
+            )
+        )
+    finally:
+        db.close()
+
+    with TestClient(runtime_app) as client:
+        assert runtime_app.state.artifact_reconciliation.removed_private_workspaces == 2
+        assert runtime_app.state.artifact_reconciliation.removed_public_artifacts == 1
+        assert referenced_publication.final_path.exists()
+        assert not orphan_publication.final_path.exists()
+        assert not private_root.joinpath(referenced.round_id).exists()
+        assert not private_root.joinpath(orphan.round_id).exists()
+        assert (
+            client.get(
+                f"/generated/{referenced.round_id}/{referenced.attempt_token}.png"
+            ).status_code
+            == 200
+        )
+        assert (
+            client.get(f"/generated/{orphan.round_id}/{orphan.attempt_token}.png").status_code
+            == 404
+        )
 
 
 def test_missing_ai_provider_fails_without_opening_db(

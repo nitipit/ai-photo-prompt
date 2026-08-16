@@ -97,6 +97,22 @@ class ShelfDbRoundRepository:
             _require_expected_snapshot(current, expected_snapshot)
             shelf.put(validated.id, validated.dict())
 
+    def list_generated_artifact_urls(self) -> list[str]:
+        """Return every durable generated-artifact URL for startup reconciliation."""
+
+        with self._db.transaction(write=False) as transaction:
+            records = [
+                _reconstruct(item.value, "stored round")
+                for item in transaction.shelf(_ROUNDS_SHELF).items()
+            ]
+        return sorted(
+            {
+                record.generated_artifact.url
+                for record in records
+                if record.generated_artifact is not None
+            }
+        )
+
     def list_completed(self, level: LevelGroup | None = None) -> list[RoundRecord]:
         """Return completed rounds ordered by completion timestamp and ID."""
 

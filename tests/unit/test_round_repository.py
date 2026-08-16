@@ -9,7 +9,13 @@ from uuid import uuid4
 import pytest
 from shelfdb.shelf import DB  # type: ignore[import-untyped]
 
-from app.domain.models import GameState, LevelGroup, RoundRecord, TerminalDisposition
+from app.domain.models import (
+    GameState,
+    ImageArtifact,
+    LevelGroup,
+    RoundRecord,
+    TerminalDisposition,
+)
 from app.persistence import (
     RoundConflictError,
     RoundNotFoundError,
@@ -142,6 +148,31 @@ def test_replace_is_a_full_replacement(repository: ShelfDbRoundRepository) -> No
     repository.replace(replacement)
 
     assert repository.get(original.id).dict() == replacement.dict()
+
+
+def test_generated_artifact_urls_include_all_durable_round_states(
+    repository: ShelfDbRoundRepository,
+) -> None:
+    first = make_round()
+    second = make_round()
+    shared_url = f"/generated/{first.id}/{uuid4()}.png"
+    first = RoundRecord(
+        **{
+            **first.dict(),
+            "generated_artifact": ImageArtifact(url=shared_url),
+        }
+    )
+    second = RoundRecord(
+        **{
+            **second.dict(),
+            "generated_artifact": ImageArtifact(url=shared_url),
+        }
+    )
+    repository.create(first)
+    repository.create(second)
+    repository.create(make_round())
+
+    assert repository.list_generated_artifact_urls() == [shared_url]
 
 
 def test_completed_listing_filters_level_and_orders_by_completion_then_id(

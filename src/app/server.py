@@ -1,5 +1,6 @@
 """FastAPI entry point for the first visible Photo Prompt checkpoint."""
 
+import asyncio
 import os
 import random
 import shutil
@@ -97,6 +98,16 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
         runtime_catalog = ChallengeCatalog.from_repository(challenge_repository)
         runtime_catalog.all()
         round_repository = ShelfDbRoundRepository(db)
+        artifact_reconciliation = None
+        if artifact_store is not None:
+            referenced_urls = await asyncio.to_thread(round_repository.list_generated_artifact_urls)
+            artifact_reconciliation = await asyncio.to_thread(
+                artifact_store.reconcile,
+                referenced_urls,
+                max_entries=int(
+                    getattr(application.state, "artifact_reconciliation_max_entries", 10_000)
+                ),
+            )
         claim_lease_duration = timedelta(
             seconds=float(getattr(application.state, "claim_lease_seconds", 30.0))
         )
@@ -125,6 +136,7 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
         application.state.round_repository = round_repository
         application.state.generation_claims = generation_claims
         application.state.artifact_store = artifact_store
+        application.state.artifact_reconciliation = artifact_reconciliation
         application.state.active_ai_provider = (
             "pi" if isinstance(pipeline, PiAIPipeline) else "fake"
         )
@@ -146,6 +158,7 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
                     "round_repository",
                     "generation_claims",
                     "artifact_store",
+                    "artifact_reconciliation",
                     "active_ai_provider",
                     "game_round_service",
                 ):
