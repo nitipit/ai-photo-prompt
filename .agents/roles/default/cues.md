@@ -79,4 +79,4 @@ discoveries, patterns, problems, and next-step context.
 | `leaderboard>ready-access level-top4 persistent-no-timer` | 2026-08-17T03:06:50+07:00 |
 | `audio>arcade-sfx default-on persisted-mute nonblocking` | 2026-08-23T19:35:41+07:00 |
 | `next>generating-denoise hybrid-canvas no-extra-time deferred` | 2026-08-23T19:53:33+07:00 |
-| `print>A5-landscape framed-name-score manual-repeat after-round-leaderboard` | 2026-08-23T20:00:13+07:00 |
+| `print>A5-landscape framed-name-score manual-repeat manual-ready after-round-leaderboard` | 2026-08-23T20:04:57+07:00 |
