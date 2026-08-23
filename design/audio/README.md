@@ -1,7 +1,7 @@
 # Arcade Sound Candidates
 
-เสียงตัวอย่างสำหรับ Photo Prompt ชุดนี้ใช้สำหรับฟังและอนุมัติก่อนเชื่อมเข้าเกม
-เปิด `preview.html` ด้วย Google Chrome แล้วกดฟังเสียงแต่ละรายการได้ทันที
+เสียง arcade ที่อนุมัติแล้วสำหรับ Photo Prompt เปิด `preview.html` ด้วย
+Google Chrome แล้วกดฟังเสียงแต่ละรายการได้ทันที
 
 | File | Intended cue | Duration |
 | --- | --- | ---: |
@@ -21,5 +21,6 @@
 uv run python design/audio/generate.py
 ```
 
-รอบนี้ยังไม่คัดลอกเสียงไป `dist/` และยังไม่เชื่อมเข้ากับ gameplay
-จนกว่าจะได้รับการอนุมัติเสียงค่ะ
+`deno task app:build` คัดลอกเฉพาะ WAV ที่อนุมัติไป `dist/audio/` ระบบเกม
+ใช้เสียงเหล่านี้เป็น progressive enhancement; หาก browser เล่นเสียงไม่ได้
+เกมยังต้องทำงานต่อได้ตามปกติ

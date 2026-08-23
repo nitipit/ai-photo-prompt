@@ -138,6 +138,78 @@
           text-transform: uppercase;
         }
 
+        .scene-controls {
+          display: flex;
+          align-items: center;
+          gap: clamp(0.55rem, 1vw, 0.9rem);
+        }
+
+        .sound-toggle {
+          display: grid;
+          width: 2.35rem;
+          height: 2.35rem;
+          flex: 0 0 auto;
+          place-items: center;
+          border: 1px solid rgba(157, 181, 189, 0.42);
+          border-radius: 50%;
+          padding: 0;
+          background: rgba(7, 26, 45, 0.5);
+          color: var(--paper);
+          cursor: pointer;
+          transition:
+            border-color 160ms ease,
+            color 160ms ease,
+            background 160ms ease;
+        }
+
+        .sound-toggle:hover {
+          border-color: var(--teal);
+          color: var(--teal);
+        }
+
+        .sound-toggle:focus-visible {
+          outline: 3px solid var(--gold);
+          outline-offset: 3px;
+        }
+
+        .sound-toggle svg {
+          width: 1.15rem;
+          height: 1.15rem;
+          overflow: visible;
+        }
+
+        .sound-speaker {
+          fill: currentColor;
+          stroke: none;
+        }
+
+        .sound-waves,
+        .sound-slash {
+          fill: none;
+          stroke: currentColor;
+          stroke-linecap: round;
+          stroke-linejoin: round;
+          stroke-width: 1.8;
+        }
+
+        .sound-slash {
+          display: none;
+          color: var(--coral);
+        }
+
+        .sound-toggle[data-muted="true"] {
+          border-color: rgba(245, 112, 97, 0.6);
+          color: var(--muted);
+        }
+
+        .sound-toggle[data-muted="true"] .sound-waves {
+          display: none;
+        }
+
+        .sound-toggle[data-muted="true"] .sound-slash {
+          display: block;
+        }
+
         .eyebrow {
           margin: 0 0 1.3rem;
           color: var(--teal);

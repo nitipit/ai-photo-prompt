@@ -1,3 +1,5 @@
+import { playSound } from "./_sound.js";
+
 type GenerationState =
   | "waiting"
   | "running"
@@ -166,6 +168,14 @@ const interceptGenerationForm = (form: HTMLFormElement): void => {
 
 if (scene) {
   const state = scene.dataset.generatingState as GenerationState | undefined;
+  if (state === "waiting") {
+    void playSound("prompt-submit");
+  } else if (state === "generated") {
+    void playSound("generation-complete");
+  } else if (state === "failure") {
+    void playSound("generation-error");
+  }
+
   if (state === "waiting" && runForm) {
     interceptGenerationForm(runForm);
     runForm.requestSubmit();

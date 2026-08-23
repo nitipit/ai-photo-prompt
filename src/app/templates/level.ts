@@ -1,3 +1,5 @@
+import { playSound } from "./_sound.js";
+
 const root = document.querySelector("component-shell")?.shadowRoot ?? document;
 const choices = [
   ...root.querySelectorAll<HTMLInputElement>('input[name="level"]'),
@@ -11,6 +13,9 @@ function updateSelectedChoice(): void {
 }
 
 for (const choice of choices) {
-  choice.addEventListener("change", updateSelectedChoice);
+  choice.addEventListener("change", () => {
+    updateSelectedChoice();
+    void playSound("ui-click");
+  });
 }
 updateSelectedChoice();

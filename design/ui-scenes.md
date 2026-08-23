@@ -101,6 +101,10 @@ Result / Feedback and Leaderboard remain separate scenes.
   countdown expires; then the current text is submitted automatically.
 - The round should not require an account, profile, or extra form.
 - The flow should remain usable as a kiosk experience without page scrolling.
+- Short arcade effects reinforce interaction, countdown, completion, score, and
+  recoverable failure; the game has no background music.
+- Sound starts enabled with a persistent speaker control on every scene. Audio
+  never carries information that is absent from the visible interface.
 
 ## Current Boundaries
 

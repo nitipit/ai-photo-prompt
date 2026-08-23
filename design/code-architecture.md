@@ -386,6 +386,11 @@ seconds.
   remain explicit ESM.
 - No SPA router, global reactive store, global CSS framework, or client-owned
   session state.
+- Approved arcade WAV files are published locally under `/audio/`. Sound is
+  default-on progressive enhancement with one persisted mute control; blocked
+  playback never blocks navigation, timing, persistence, or game state.
+- Countdown and scene cues are owned by their existing browser modules. No
+  background music or duplicate leaderboard fanfare is played.
 
 ## Implementation Ownership
 
