@@ -235,14 +235,75 @@ def test_leaderboard_get_enforces_persisted_deadline_without_mutation(
             assert "client-fact" not in response.text
             assert completed.leaderboard_deadline in response.text
         else:
-            assert response.headers["location"] == "/"
+            expected_photo_print = f"/rounds/{round_id}/photo-print"
+            assert response.headers["location"] == expected_photo_print
             reloaded = client.get(
                 f"/rounds/{round_id}/leaderboard",
                 follow_redirects=False,
             )
             assert reloaded.status_code == 303
-            assert reloaded.headers["location"] == "/"
+            assert reloaded.headers["location"] == expected_photo_print
         assert _stored_record(runtime_app, round_id).dict() == before
+
+
+def test_photo_print_route_renders_completed_round_projection_and_escapes_name(runtime_app) -> None:
+    with TestClient(runtime_app) as client:
+        round_id = _start_generated(client, display_name="น้อง <ภาพ>")
+        generated = _stored_record(runtime_app, round_id)
+        assert generated.reveal_deadline is not None
+        _set_clock_at(runtime_app, generated.reveal_deadline)
+        assert (
+            client.post(
+                f"/rounds/{round_id}/generating/continue",
+                follow_redirects=False,
+            ).status_code
+            == 303
+        )
+        assert (
+            client.post(
+                f"/rounds/{round_id}/result/leaderboard",
+                follow_redirects=False,
+            ).status_code
+            == 303
+        )
+        completed = _stored_record(runtime_app, round_id)
+        assert completed.generated_artifact is not None
+        assert completed.score is not None
+
+        photo_print = client.get(f"/rounds/{round_id}/photo-print?score=1&display_name=attacker")
+
+        assert photo_print.status_code == 200
+        assert 'data-scene="photo-print"' in photo_print.text
+        assert 'data-photo-print-data="completed-round-projection"' in photo_print.text
+        assert f'src="{completed.generated_artifact.url}"' in photo_print.text
+        assert f"{completed.score.total_score}" in photo_print.text
+        assert "น้อง &lt;ภาพ&gt;" in photo_print.text
+        assert "น้อง <ภาพ>" not in photo_print.text
+        assert 'id="print-photo-button"' in photo_print.text
+        assert "พิมพ์ภาพนี้" in photo_print.text
+        assert "เสร็จแล้ว เริ่มเล่นเกมใหม่" in photo_print.text
+        assert "A5 landscape" in photo_print.text
+        assert "object-fit: contain" in photo_print.text
+
+
+def test_photo_print_frontend_contract_allows_repeat_print_after_afterprint() -> None:
+    root = Path(__file__).parents[2] / "src/app/templates"
+    template_source = (root / "photo_print.html").read_text(encoding="utf-8")
+    script_source = (root / "photo_print.ts").read_text(encoding="utf-8")
+    leaderboard_script = (root / "leaderboard.ts").read_text(encoding="utf-8")
+
+    assert 'type="button"' in template_source
+    assert 'href="/"' in template_source
+    assert "data-leaderboard-deadline" not in template_source
+    assert "setTimeout" not in script_source
+    assert "globalThis.print()" in script_source
+    assert 'addEventListener("afterprint"' in script_source
+    assert "printInFlight" in script_source
+    assert "printButton.disabled = true" in script_source
+    assert "printButton.innerHTML = 'พิมพ์อีกครั้ง" in script_source
+    assert "currentRoundId" in leaderboard_script
+    assert "photoPrintUrl" in leaderboard_script
+    assert 'location.assign(photoPrintUrl ?? "/")' in leaderboard_script
 
 
 def test_leaderboard_missing_deadline_remains_validation_error(runtime_app) -> None:
@@ -377,6 +438,7 @@ def test_public_leaderboard_is_direct_persistent_and_level_filtered(runtime_app)
         assert 'data-leaderboard-mode="public"' in empty.text
         assert 'data-leaderboard-level="p1-p3"' in empty.text
         assert 'data-leaderboard-empty="true"' in empty.text
+        assert "data-photo-print-url" not in empty.text
         assert "leaderboard.js" not in empty.text
         assert "data-leaderboard-countdown" not in empty.text
 
@@ -474,6 +536,8 @@ def test_leaderboard_frontend_contract_is_single_screen_without_list_clipping() 
     assert "grid-template-rows: repeat(4" in list_rule
     assert "overflow" not in list_rule
     assert 'data-leaderboard-deadline="{{ leaderboard_deadline }}"' in leaderboard_source
+    assert 'data-current-round="{{ round_id }}"' in leaderboard_source
+    assert "photo-print" not in leaderboard_source
     assert "public-level-projection" in leaderboard_source
     assert "data-leaderboard-countdown" in leaderboard_source
 
@@ -484,6 +548,7 @@ def test_result_and_leaderboard_routes_map_missing_and_stale_rounds(runtime_app)
         assert client.get(f"/rounds/{missing_id}/result").status_code == 404
         assert client.post(f"/rounds/{missing_id}/result/leaderboard").status_code == 404
         assert client.get(f"/rounds/{missing_id}/leaderboard").status_code == 404
+        assert client.get(f"/rounds/{missing_id}/photo-print").status_code == 404
         assert client.post(f"/rounds/{missing_id}/generating/continue").status_code == 404
 
         started = client.post("/rounds", follow_redirects=False)
@@ -491,4 +556,5 @@ def test_result_and_leaderboard_routes_map_missing_and_stale_rounds(runtime_app)
         assert client.get(f"/rounds/{round_id}/result").status_code == 409
         assert client.post(f"/rounds/{round_id}/result/leaderboard").status_code == 409
         assert client.get(f"/rounds/{round_id}/leaderboard").status_code == 409
+        assert client.get(f"/rounds/{round_id}/photo-print").status_code == 409
         assert client.post(f"/rounds/{round_id}/generating/continue").status_code == 409

@@ -23,6 +23,7 @@ Ready
 → Generating / Generated Reveal
 → Result / Feedback
 → Leaderboard
+→ Photo Print
 → Ready navigation for the next new round
 ```
 
@@ -75,6 +76,7 @@ src/
       generating.html / generating.ts
       result.html / result.ts
       leaderboard.html / leaderboard.ts
+      photo_print.html / photo_print.ts
 ```
 
 `src/app/templates/` is intentionally both the Jinja template root and the
@@ -341,9 +343,11 @@ and are filtered to the selected level group.
 Equal scores share the same competition rank, for example `1, 2, 2, 4`.
 Generation latency and prompt completion time never break ties. The post-round
 view emits at most four rows while preserving the current round and its global
-rank. The read-only public view emits the Top 4 for the selected level, has no
+rank, then advances to the Photo Print projection after its existing 15-second
+window. The read-only public view emits the Top 4 for the selected level, has no
 current-player highlight, and can be opened directly from Ready without creating
-or completing a round.
+or completing a round. Photo Print is a read-only projection of a completed
+leaderboard round and does not add a persisted state or print count.
 
 ## Route and HTML-First Contract
 
@@ -357,7 +361,9 @@ Required flow boundaries:
   level query.
 - `POST /rounds` creates a fresh round and redirects to level selection.
 - Round-scoped GET/POST routes handle level, challenge, prompt, generating,
-  result, and leaderboard scenes.
+  result, leaderboard, and the direct `/rounds/{round_id}/photo-print` scene.
+- Photo Print accepts only a completed leaderboard round, renders a server-owned
+  A5 landscape projection, and remains until the player navigates to Ready.
 - Generation has ordinary POST actions for start/retry and exit so JavaScript is
   not the only owner.
 - Status polling is read-only and pipeline start/retry is idempotent through the
@@ -391,6 +397,9 @@ seconds.
   playback never blocks navigation, timing, persistence, or game state.
 - Countdown and scene cues are owned by their existing browser modules. No
   background music or duplicate leaderboard fanfare is played.
+- Photo Print uses a small browser module for user-initiated `print()` only;
+  repeated requests are allowed after the browser's `afterprint` event and no
+  physical print success is inferred.
 
 ## Implementation Ownership
 

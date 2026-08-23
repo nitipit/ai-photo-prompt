@@ -5,6 +5,10 @@ const countdown = root.querySelector<HTMLElement>(
 );
 const MAX_LEADERBOARD_SECONDS = 15;
 const deadline = Date.parse(scene?.dataset.leaderboardDeadline ?? "");
+const currentRoundId = scene?.dataset.currentRound;
+const photoPrintUrl = currentRoundId
+  ? `/rounds/${currentRoundId}/photo-print`
+  : undefined;
 
 if (scene && countdown && Number.isFinite(deadline)) {
   let navigationStarted = false;
@@ -28,7 +32,7 @@ if (scene && countdown && Number.isFinite(deadline)) {
     if (timeoutId !== undefined) {
       globalThis.clearTimeout(timeoutId);
     }
-    location.assign("/");
+    location.assign(photoPrintUrl ?? "/");
   };
 
   const updateCountdown = (): void => {

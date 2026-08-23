@@ -43,6 +43,7 @@ from .domain.models import (
     GenerationStatusState,
     LevelGroup,
     PromptSubmissionReason,
+    TerminalDisposition,
 )
 from .persistence import (
     ChallengeNotFoundError,
@@ -65,6 +66,7 @@ from .web import (
     render_generating,
     render_leaderboard,
     render_level_selection,
+    render_photo_print,
     render_prompt_entry,
     render_public_leaderboard,
     render_ready,
@@ -634,7 +636,10 @@ async def leaderboard_scene(request: Request, round_id: str):
     record = await _get_scene_round(request, round_id, GameState.LEADERBOARD)
     try:
         if request.app.state.game_round_service.leaderboard_deadline_elapsed(record):
-            return RedirectResponse(url="/", status_code=303)
+            return RedirectResponse(
+                url=f"/rounds/{round_id}/photo-print",
+                status_code=303,
+            )
     except GameRoundValidationError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
 
@@ -657,6 +662,25 @@ async def leaderboard_scene(request: Request, round_id: str):
         current_rank=projection.current_rank,
         rows=projection.entries,
         leaderboard_deadline=record.leaderboard_deadline,
+    )
+
+
+@app.get("/rounds/{round_id}/photo-print", response_class=HTMLResponse)
+async def photo_print_scene(request: Request, round_id: str):
+    """Render the read-only A5 print projection for a completed round."""
+
+    record = await _get_scene_round(request, round_id, GameState.LEADERBOARD)
+    if record.terminal_disposition is not TerminalDisposition.COMPLETED:
+        raise HTTPException(status_code=409, detail="Photo Print requires a completed round")
+    if record.level is None or record.generated_artifact is None or record.score is None:
+        raise HTTPException(status_code=422, detail="Photo Print data is incomplete")
+    return render_photo_print(
+        request,
+        round_id,
+        display_name=record.display_name,
+        level=record.level.value,
+        generated_artifact=record.generated_artifact,
+        score=record.score,
     )
 
 
