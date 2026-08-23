@@ -77,3 +77,4 @@ discoveries, patterns, problems, and next-step context.
 | `concurrency>claims-live-lease snapshot-cas cancellation-settle-cleanup` | 2026-08-13T23:16:00+07:00 |
 | `leaderboard>max-four-current-visible server-deadline` | 2026-08-13T23:16:00+07:00 |
 | `leaderboard>ready-access level-top4 persistent-no-timer` | 2026-08-17T03:06:50+07:00 |
+| `audio>arcade-sfx default-on persisted-mute nonblocking` | 2026-08-23T19:35:41+07:00 |
