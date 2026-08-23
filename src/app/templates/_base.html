@@ -28,6 +28,12 @@
         }
       }
     </style>
+    <style id="photo-print-page-rules">
+      @page {
+        size: A5 landscape;
+        margin: 0;
+      }
+    </style>
     <script type="module" src="/templates/_base.js"></script>
   </head>
   <body>
@@ -1611,11 +1617,6 @@
         .leaderboard-ready-link:focus-visible {
           outline: 3px solid var(--gold);
           outline-offset: 4px;
-        }
-
-        @page {
-          size: A5 landscape;
-          margin: 0;
         }
 
         .photo-print-scene {

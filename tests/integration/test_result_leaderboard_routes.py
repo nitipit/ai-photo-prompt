@@ -306,6 +306,20 @@ def test_photo_print_frontend_contract_allows_repeat_print_after_afterprint() ->
     assert 'location.assign(photoPrintUrl ?? "/")' in leaderboard_script
 
 
+def test_photo_print_page_size_rule_is_in_document_head() -> None:
+    base_source = (Path(__file__).parents[2] / "src/app/templates/_base.html").read_text(
+        encoding="utf-8"
+    )
+    head_source = base_source.split("</head>", maxsplit=1)[0]
+    shadow_source = base_source.split("<component-shell>", maxsplit=1)[1]
+
+    assert '<style id="photo-print-page-rules">' in head_source
+    assert "@page" in head_source
+    assert "size: A5 landscape" in head_source
+    assert head_source.count("@page") == 1
+    assert "@page" not in shadow_source
+
+
 def test_leaderboard_missing_deadline_remains_validation_error(runtime_app) -> None:
     with TestClient(runtime_app) as client:
         round_id = _start_generated(client, display_name="Current")
