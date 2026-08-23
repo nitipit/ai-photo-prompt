@@ -100,20 +100,24 @@ def service_for(
 
 
 @pytest.mark.asyncio
-async def test_create_round_normalizes_name_and_enforces_limit(setup) -> None:
+async def test_create_round_requires_normalized_name_and_enforces_limit(setup) -> None:
     repository, clock = setup
     service = service_for(repository, clock)
 
-    anonymous = await service.create_round("  ")
-    named = await service.create_round("  น้องมะลิ  ")
+    named = await service.create_round("  น้องมะลิ (ป.3)  ")
+    longest = await service.create_round("x" * 50)
 
-    assert anonymous.display_name == "นิรนาม"
-    assert named.display_name == "น้องมะลิ"
-    assert anonymous.state is GameState.LEVEL_SELECTION
-    assert anonymous.created_at == anonymous.updated_at
+    assert named.display_name == "น้องมะลิ (ป.3)"
+    assert named.state is GameState.LEVEL_SELECTION
+    assert named.created_at == named.updated_at
+    assert longest.display_name == "x" * 50
 
-    with pytest.raises(GameRoundValidationError):
-        await service.create_round("x" * 31)
+    for missing_name in ("", "   "):
+        with pytest.raises(GameRoundValidationError, match="display name is required"):
+            await service.create_round(missing_name)
+
+    with pytest.raises(GameRoundValidationError, match="at most 50 characters"):
+        await service.create_round("x" * 51)
 
 
 @pytest.mark.asyncio
@@ -126,7 +130,7 @@ async def test_configure_uses_injected_selection_and_persists_level_and_challeng
         return challenges[2]
 
     service = service_for(repository, clock, choose)
-    created = await service.create_round()
+    created = await service.create_round("Tester")
     configured = await service.configure_round(created.id, LevelGroup.P4_P6)
 
     assert selected == [tuple(f"p4-p6-{index}" for index in range(5))]
@@ -140,7 +144,7 @@ async def test_configure_uses_injected_selection_and_persists_level_and_challeng
 async def test_continue_challenge_sets_prompt_entry_and_ninety_second_deadline(setup) -> None:
     repository, clock = setup
     service = service_for(repository, clock)
-    created = await service.create_round()
+    created = await service.create_round("Tester")
     configured = await service.configure_round(created.id, LevelGroup.P1_P3)
 
     continued = await service.continue_challenge(created.id)
@@ -156,7 +160,7 @@ async def test_continue_challenge_sets_prompt_entry_and_ninety_second_deadline(s
 async def test_manual_prompt_preserves_text_and_reason(setup) -> None:
     repository, clock = setup
     service = service_for(repository, clock)
-    created = await service.create_round()
+    created = await service.create_round("Tester")
     await service.configure_round(created.id, LevelGroup.P1_P3)
     await service.continue_challenge(created.id)
 
@@ -187,7 +191,7 @@ async def test_prompt_deadline_authorizes_reason_and_blankness(
 ) -> None:
     repository, clock = setup
     service = service_for(repository, clock)
-    created = await service.create_round()
+    created = await service.create_round("Tester")
     await service.configure_round(created.id, LevelGroup.P1_P3)
     continued = await service.continue_challenge(created.id)
     assert continued.prompt_deadline is not None
@@ -230,7 +234,7 @@ async def test_prompt_deadline_authorizes_reason_and_blankness(
 async def test_timeout_nonblank_submits_after_authoritative_deadline(setup) -> None:
     repository, clock = setup
     service = service_for(repository, clock)
-    created = await service.create_round()
+    created = await service.create_round("Tester")
     await service.configure_round(created.id, LevelGroup.P1_P3)
     continued = await service.continue_challenge(created.id)
     assert continued.prompt_deadline is not None
@@ -251,7 +255,7 @@ async def test_timeout_nonblank_submits_after_authoritative_deadline(setup) -> N
 async def test_blank_timeout_abandons_terminal_round_without_score(setup) -> None:
     repository, clock = setup
     service = service_for(repository, clock)
-    created = await service.create_round()
+    created = await service.create_round("Tester")
     await service.configure_round(created.id, LevelGroup.P1_P3)
     continued = await service.continue_challenge(created.id)
     assert continued.prompt_deadline is not None
@@ -272,7 +276,7 @@ async def test_blank_timeout_abandons_terminal_round_without_score(setup) -> Non
 async def test_blank_manual_and_early_timeout_leave_stored_mapping_unchanged(setup) -> None:
     repository, clock = setup
     service = service_for(repository, clock)
-    created = await service.create_round()
+    created = await service.create_round("Tester")
     await service.configure_round(created.id, LevelGroup.P1_P3)
     continued = await service.continue_challenge(created.id)
     before = (await service.get_round(created.id)).dict()
@@ -291,7 +295,7 @@ async def test_blank_manual_and_early_timeout_leave_stored_mapping_unchanged(set
 async def test_missing_prompt_deadline_rejects_without_mutation(setup) -> None:
     repository, clock = setup
     service = service_for(repository, clock)
-    created = await service.create_round()
+    created = await service.create_round("Tester")
     await service.configure_round(created.id, LevelGroup.P1_P3)
     continued = await service.continue_challenge(created.id)
     missing_deadline = continued.dict()
@@ -309,7 +313,7 @@ async def test_missing_prompt_deadline_rejects_without_mutation(setup) -> None:
 async def test_invalid_state_calls_leave_stored_mapping_unchanged(setup) -> None:
     repository, clock = setup
     service = service_for(repository, clock)
-    created = await service.create_round()
+    created = await service.create_round("Tester")
     before = (await service.get_round(created.id)).dict()
 
     with pytest.raises(GameRoundConflictError):
@@ -327,7 +331,7 @@ async def test_repository_operations_run_off_event_loop_thread(setup) -> None:
     service = service_for(recording, clock)
     event_loop_thread = get_ident()
 
-    created = await service.create_round()
+    created = await service.create_round("Tester")
     configured = await service.configure_round(created.id, LevelGroup.P1_P3)
     await service.continue_challenge(configured.id)
     await service.get_round(created.id)
@@ -347,7 +351,7 @@ async def test_repository_operations_run_off_event_loop_thread(setup) -> None:
 async def test_input_limits_are_rejected_without_mutation(setup) -> None:
     repository, clock = setup
     service = service_for(repository, clock)
-    created = await service.create_round()
+    created = await service.create_round("Tester")
     await service.configure_round(created.id, LevelGroup.P1_P3)
     await service.continue_challenge(created.id)
     before = (await service.get_round(created.id)).dict()
@@ -361,7 +365,7 @@ async def test_input_limits_are_rejected_without_mutation(setup) -> None:
 async def test_completed_created_timestamp_is_preserved_on_every_mutation(setup) -> None:
     repository, clock = setup
     service = service_for(repository, clock)
-    created = await service.create_round()
+    created = await service.create_round("Tester")
 
     clock.current += timedelta(seconds=1)
     configured = await service.configure_round(created.id, LevelGroup.P1_P3)

@@ -108,9 +108,8 @@ _PROVIDER_ERROR_CODE = "provider_error"
 _PROVIDER_ERROR_MESSAGE = "การประมวลผล AI ล้มเหลวชั่วคราว"
 _INVALID_PIPELINE_RESULT_CODE = "invalid_pipeline_result"
 _INVALID_PIPELINE_RESULT_MESSAGE = "ผลลัพธ์จาก AI ไม่ถูกต้อง"
-_MAX_DISPLAY_NAME_LENGTH = 30
+_MAX_DISPLAY_NAME_LENGTH = 50
 _MAX_PROMPT_LENGTH = 1000
-_ANONYMOUS_NAME = "นิรนาม"
 
 
 class GameRoundService:
@@ -160,8 +159,8 @@ class GameRoundService:
                 "generation claims lease duration must match the service"
             )
 
-    async def create_round(self, display_name: str = "") -> RoundRecord:
-        """Create a fresh round in level selection with normalized identity."""
+    async def create_round(self, display_name: str) -> RoundRecord:
+        """Create a fresh named round in level selection."""
 
         normalized_name = self._normalize_display_name(display_name)
         timestamp = self._timestamp()
@@ -1189,9 +1188,11 @@ class GameRoundService:
     def _normalize_display_name(display_name: str) -> str:
         if not isinstance(display_name, str):
             raise GameRoundValidationError("display name must be a string")
-        normalized = display_name.strip() or _ANONYMOUS_NAME
+        normalized = display_name.strip()
+        if not normalized:
+            raise GameRoundValidationError("display name is required")
         if len(normalized) > _MAX_DISPLAY_NAME_LENGTH:
-            raise GameRoundValidationError("display name must be at most 30 characters")
+            raise GameRoundValidationError("display name must be at most 50 characters")
         return normalized
 
     @staticmethod

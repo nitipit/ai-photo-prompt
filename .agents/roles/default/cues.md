@@ -11,7 +11,7 @@ discoveries, patterns, problems, and next-step context.
 | `scene>result-feedback separate-from leaderboard` | 2026-08-07T23:08:10+07:00 |
 | `scene>round-complete merged-into result-feedback` | 2026-08-07T23:09:48+07:00 |
 | `scene>ready separate-from level-selection` | 2026-08-07T23:10:40+07:00 |
-| `leaderboard>name-on-level-selection fallback-นิรนาม` | 2026-08-07T23:13:46+07:00 |
+| `identity>name-on-ready required-combined-label max50` | 2026-08-23T22:47:52+07:00 |
 | `challenge>image-only short-instruction` | 2026-08-07T23:15:38+07:00 |
 | `prompt>small-target-reference` | 2026-08-07T23:16:22+07:00 |
 | `prompt>free-form-text-only` | 2026-08-07T23:17:09+07:00 |

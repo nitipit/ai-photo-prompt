@@ -183,8 +183,8 @@ not change persistence.
   visitor navigates back.
 - Challenge: independently random from the five approved challenges in the
   selected level. The selector is injected so tests are deterministic.
-- Display name: trim surrounding whitespace, empty becomes `นิรนาม`, maximum 30
-  characters.
+- Display name: required combined `ชื่อเล่น (ชั้นเรียน)` text, trim surrounding
+  whitespace, reject blank values, maximum 50 characters.
 - Prompt: maximum 1,000 characters.
 - Manual blank prompt is rejected.
 - Timeout with nonblank current text auto-submits.

@@ -41,14 +41,14 @@ Ready
 
 ### 1. Ready
 
-A separate attract screen for the next player. It invites the player to start
-and offers a secondary `ดูอันดับ` action that opens the read-only leaderboard
-without creating or completing a round.
+A separate attract screen for the next player. It requires one combined
+`ชื่อเล่น (ชั้นเรียน)` display name of at most 50 characters before enabling
+Start, and offers a secondary `ดูอันดับ` action that opens the read-only
+leaderboard without creating or completing a round.
 
 ### 2. Level Selection
 
-The player or booth staff enters a display name and chooses the school-level
-group. The name is optional; an empty name becomes `นิรนาม`.
+The player or booth staff chooses the school-level group for the named round.
 
 ### 3. Challenge Reveal
 
