@@ -612,14 +612,19 @@
 
         .challenge-hero {
           display: grid;
+          width: 100%;
           min-height: 0;
+          align-self: stretch;
           overflow: hidden;
           place-items: center;
         }
 
         .challenge-frame {
           position: relative;
-          width: min(76%, 62rem, 80vh);
+          width: auto;
+          max-width: min(76%, 62rem);
+          height: 100%;
+          max-height: 100%;
           aspect-ratio: 16 / 9;
           overflow: hidden;
           border: 0.35rem solid rgba(245, 247, 239, 0.88);
@@ -878,7 +883,10 @@
 
         .generating-frame {
           position: relative;
-          width: min(76%, 62rem, 80vh);
+          width: auto;
+          max-width: min(76%, 62rem);
+          height: 100%;
+          max-height: 100%;
           aspect-ratio: 16 / 9;
           overflow: hidden;
           border: 0.35rem solid rgba(245, 247, 239, 0.88);
@@ -1088,7 +1096,7 @@
         .result-frame {
           position: relative;
           width: 100%;
-          aspect-ratio: 4 / 3;
+          aspect-ratio: 16 / 9;
           overflow: hidden;
           border: 0.28rem solid rgba(245, 247, 239, 0.88);
           border-radius: 1.1rem;
@@ -1522,6 +1530,25 @@
         .leaderboard-ready-link:focus-visible {
           outline: 3px solid var(--gold);
           outline-offset: 4px;
+        }
+
+        @media (max-height: 960px) and (min-aspect-ratio: 3/2) {
+          .level-layout {
+            padding-top: 13vh;
+            padding-bottom: 4vh;
+          }
+
+          .challenge-layout,
+          .prompt-layout,
+          .generating-layout {
+            padding-top: 14vh;
+            padding-bottom: 3vh;
+          }
+
+          .result-layout {
+            padding-top: 13vh;
+            padding-bottom: 3vh;
+          }
         }
 
         @media (max-width: 900px) {
