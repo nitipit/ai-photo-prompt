@@ -281,6 +281,8 @@ def test_photo_print_route_renders_completed_round_projection_and_escapes_name(r
         assert "น้อง <ภาพ>" not in photo_print.text
         assert 'id="print-photo-button"' in photo_print.text
         assert "พิมพ์ภาพนี้" in photo_print.text
+        assert "หากมีหน้าต่างพิมพ์" in photo_print.text
+        assert "อาจแสดงหน้าต่างพิมพ์" in photo_print.text
         assert "เสร็จแล้ว เริ่มเล่นเกมใหม่" in photo_print.text
         assert "A5 landscape" in photo_print.text
         assert "object-fit: contain" in photo_print.text
@@ -303,6 +305,8 @@ def test_photo_print_frontend_contract_allows_repeat_print_after_afterprint() ->
     assert "printButton.innerHTML = 'พิมพ์อีกครั้ง" in script_source
     assert "currentRoundId" in leaderboard_script
     assert "photoPrintUrl" in leaderboard_script
+    assert "navigateToPhotoPrint" in leaderboard_script
+    assert "navigateToReady" not in leaderboard_script
     assert 'location.assign(photoPrintUrl ?? "/")' in leaderboard_script
 
 

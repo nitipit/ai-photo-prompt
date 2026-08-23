@@ -21,7 +21,7 @@ if (scene && countdown && Number.isFinite(deadline)) {
       Math.max(0, Math.ceil((deadline - Date.now()) / 1000)),
     );
 
-  const navigateToReady = (): void => {
+  const navigateToPhotoPrint = (): void => {
     if (navigationStarted) {
       return;
     }
@@ -39,7 +39,7 @@ if (scene && countdown && Number.isFinite(deadline)) {
     const secondsRemaining = secondsUntilDeadline();
     countdown.textContent = String(secondsRemaining);
     if (secondsRemaining === 0) {
-      navigateToReady();
+      navigateToPhotoPrint();
     }
   };
 
@@ -47,7 +47,7 @@ if (scene && countdown && Number.isFinite(deadline)) {
   if (!navigationStarted) {
     intervalId = globalThis.setInterval(updateCountdown, 1000);
     timeoutId = globalThis.setTimeout(
-      navigateToReady,
+      navigateToPhotoPrint,
       Math.max(0, deadline - Date.now()),
     );
   }
