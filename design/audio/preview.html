@@ -1,0 +1,343 @@
+<!DOCTYPE html>
+<html lang="th">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Photo Prompt · Arcade Sound Preview</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        font-family: "Noto Sans Thai", system-ui, sans-serif;
+        background: #071a2d;
+        color: #f5f7ef;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        min-height: 100vh;
+        margin: 0;
+        padding: clamp(1.5rem, 4vw, 4rem);
+        background:
+          radial-gradient(
+            circle at 12% 8%,
+            rgb(66 214 196 / 18%),
+            transparent 28rem
+          ),
+          radial-gradient(
+          circle at 90% 92%,
+          rgb(245 112 97 / 14%),
+          transparent 30rem
+        ),
+          #071a2d;
+      }
+
+      main {
+        width: min(72rem, 100%);
+        margin: 0 auto;
+      }
+
+      header {
+        display: flex;
+        align-items: end;
+        justify-content: space-between;
+        gap: 1.5rem;
+        margin-bottom: 2rem;
+      }
+
+      .eyebrow {
+        margin: 0 0 0.45rem;
+        color: #42d6c4;
+        font-size: 0.78rem;
+        font-weight: 800;
+        letter-spacing: 0.14em;
+      }
+
+      h1 {
+        margin: 0;
+        font-size: clamp(2rem, 5vw, 4.2rem);
+        line-height: 1;
+      }
+
+      h1 span {
+        color: #f57061;
+      }
+
+      .intro {
+        max-width: 36rem;
+        margin: 0.8rem 0 0;
+        color: #9db5bd;
+      }
+
+      #stop-all {
+        flex: 0 0 auto;
+        min-height: 2.8rem;
+        border: 1px solid rgb(157 181 189 / 42%);
+        border-radius: 999px;
+        padding: 0.55rem 1rem;
+        background: #0c2941;
+        color: #f5f7ef;
+        cursor: pointer;
+        font: inherit;
+        font-weight: 700;
+      }
+
+      .sound-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 1rem;
+      }
+
+      .sound-card {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        align-items: center;
+        gap: 1rem;
+        border: 1px solid rgb(157 181 189 / 26%);
+        border-radius: 1.1rem;
+        padding: 1.15rem;
+        background: rgb(12 41 65 / 80%);
+        box-shadow: 0 1rem 2.5rem rgb(0 0 0 / 16%);
+      }
+
+      .sound-card[data-playing="true"] {
+        border-color: #f7c95b;
+        box-shadow: inset 0 0 0 1px rgb(247 201 91 / 20%);
+      }
+
+      .sound-index {
+        color: #f7c95b;
+        font-size: 0.72rem;
+        font-weight: 800;
+        letter-spacing: 0.1em;
+      }
+
+      h2 {
+        margin: 0.25rem 0 0.15rem;
+        font-size: clamp(1rem, 2vw, 1.25rem);
+      }
+
+      .sound-purpose {
+        margin: 0;
+        color: #9db5bd;
+        font-size: 0.85rem;
+      }
+
+      .sound-file {
+        display: block;
+        margin-top: 0.6rem;
+        color: #78939e;
+        font-family: ui-monospace, monospace;
+        font-size: 0.7rem;
+      }
+
+      .play-sound {
+        display: grid;
+        width: 4rem;
+        height: 4rem;
+        place-items: center;
+        border: 2px solid #f57061;
+        border-radius: 50%;
+        background: #f57061;
+        color: #071a2d;
+        cursor: pointer;
+        font: inherit;
+        font-size: 1.35rem;
+        font-weight: 900;
+        transition: transform 140ms ease;
+      }
+
+      .play-sound:hover {
+        transform: scale(1.06);
+      }
+
+      .play-sound:focus-visible,
+      #stop-all:focus-visible {
+        outline: 3px solid #f7c95b;
+        outline-offset: 3px;
+      }
+
+      footer {
+        margin-top: 1.5rem;
+        color: #78939e;
+        font-size: 0.78rem;
+      }
+
+      @media (max-width: 720px) {
+        header {
+          align-items: start;
+          flex-direction: column;
+        }
+
+        .sound-grid {
+          grid-template-columns: 1fr;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <header>
+        <div>
+          <p class="eyebrow">PHOTO PROMPT · SOUND LAB</p>
+          <h1>Arcade <span>Sound Preview</span></h1>
+          <p class="intro">
+            กดปุ่มวงกลมเพื่อฟังทีละเสียง หน้านี้ใช้สำหรับเลือกเสียงเท่านั้น และยังไม่ได้เชื่อมเข้ากับเกม
+          </p>
+        </div>
+        <button id="stop-all" type="button">หยุดเสียงทั้งหมด</button>
+      </header>
+
+      <section class="sound-grid" aria-label="เสียงตัวอย่าง">
+        <article class="sound-card">
+          <div>
+            <span class="sound-index">01 · UI</span>
+            <h2>กดปุ่มและเลือกช่วงชั้น</h2>
+            <p class="sound-purpose">เสียงตอบสนองสั้น กระชับ และไม่รบกวน</p>
+            <code class="sound-file">ui-click.wav · 0.16 วินาที</code>
+          </div>
+          <button
+            class="play-sound"
+            type="button"
+            data-audio="ui-click.wav"
+            aria-label="ฟังเสียงกดปุ่ม"
+          >
+            ▶
+          </button>
+        </article>
+
+        <article class="sound-card">
+          <div>
+            <span class="sound-index">02 · PROMPT</span>
+            <h2>ส่งคำสั่งสร้างภาพ</h2>
+            <p class="sound-purpose">โน้ตไล่ขึ้นเพื่อพาเข้าสู่ช่วงสร้างภาพ</p>
+            <code class="sound-file">prompt-submit.wav · 0.48 วินาที</code>
+          </div>
+          <button
+            class="play-sound"
+            type="button"
+            data-audio="prompt-submit.wav"
+            aria-label="ฟังเสียงส่งคำสั่ง"
+          >
+            ▶
+          </button>
+        </article>
+
+        <article class="sound-card">
+          <div>
+            <span class="sound-index">03 · TIMER</span>
+            <h2>นับถอยหลัง 5 วินาที</h2>
+            <p class="sound-purpose">เสียง tick สั้นที่ได้ยินชัดแต่ไม่กดดันเกินไป</p>
+            <code class="sound-file">countdown-tick.wav · 0.14 วินาที</code>
+          </div>
+          <button
+            class="play-sound"
+            type="button"
+            data-audio="countdown-tick.wav"
+            aria-label="ฟังเสียงนับถอยหลัง"
+          >
+            ▶
+          </button>
+        </article>
+
+        <article class="sound-card">
+          <div>
+            <span class="sound-index">04 · COMPLETE</span>
+            <h2>สร้างภาพสำเร็จ</h2>
+            <p class="sound-purpose">เสียงประกายไล่โน้ตขึ้นสำหรับภาพที่พร้อมแล้ว</p>
+            <code class="sound-file">generation-complete.wav · 0.82 วินาที</code>
+          </div>
+          <button
+            class="play-sound"
+            type="button"
+            data-audio="generation-complete.wav"
+            aria-label="ฟังเสียงสร้างภาพสำเร็จ"
+          >
+            ▶
+          </button>
+        </article>
+
+        <article class="sound-card">
+          <div>
+            <span class="sound-index">05 · SCORE</span>
+            <h2>เปิดคะแนนและอันดับ</h2>
+            <p class="sound-purpose">เสียง fanfare แบบตู้เกมสำหรับช่วงฉลองผลลัพธ์</p>
+            <code class="sound-file">score-reveal.wav · 1.10 วินาที</code>
+          </div>
+          <button
+            class="play-sound"
+            type="button"
+            data-audio="score-reveal.wav"
+            aria-label="ฟังเสียงเปิดคะแนน"
+          >
+            ▶
+          </button>
+        </article>
+
+        <article class="sound-card">
+          <div>
+            <span class="sound-index">06 · ERROR</span>
+            <h2>สร้างภาพไม่สำเร็จ</h2>
+            <p class="sound-purpose">โน้ตลดระดับแบบนุ่ม ๆ โดยไม่ทำให้เด็กรู้สึกผิด</p>
+            <code class="sound-file">generation-error.wav · 0.62 วินาที</code>
+          </div>
+          <button
+            class="play-sound"
+            type="button"
+            data-audio="generation-error.wav"
+            aria-label="ฟังเสียงสร้างภาพไม่สำเร็จ"
+          >
+            ▶
+          </button>
+        </article>
+      </section>
+
+      <footer>ไฟล์ WAV · mono · 44.1 kHz · 16-bit · peak −9.9 dBFS</footer>
+    </main>
+
+    <script>
+      const cards = [...document.querySelectorAll(".sound-card")];
+      const players = new Map();
+
+      const stopAll = () => {
+        for (const [button, audio] of players) {
+          audio.pause();
+          audio.currentTime = 0;
+          button.textContent = "▶";
+          button.closest(".sound-card").dataset.playing = "false";
+        }
+      };
+
+      for (const button of document.querySelectorAll(".play-sound")) {
+        const audio = new Audio(button.dataset.audio);
+        audio.preload = "auto";
+        audio.volume = 0.72;
+        players.set(button, audio);
+
+        button.addEventListener("click", async () => {
+          const wasPlaying = !audio.paused;
+          stopAll();
+          if (wasPlaying) return;
+          button.textContent = "■";
+          button.closest(".sound-card").dataset.playing = "true";
+          try {
+            await audio.play();
+          } catch (error) {
+            button.textContent = "▶";
+            button.closest(".sound-card").dataset.playing = "false";
+            console.error("เล่นเสียงไม่ได้", error);
+          }
+        });
+
+        audio.addEventListener("ended", () => {
+          button.textContent = "▶";
+          button.closest(".sound-card").dataset.playing = "false";
+        });
+      }
+
+      document.querySelector("#stop-all").addEventListener("click", stopAll);
+    </script>
+  </body>
+</html>

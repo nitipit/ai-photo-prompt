@@ -68,6 +68,31 @@ def render_leaderboard(
     )
 
 
+def render_photo_print(
+    request: Request,
+    round_id: str,
+    *,
+    display_name: str,
+    level: str,
+    generated_artifact: ImageArtifact,
+    score: ScoreResult,
+):
+    """Render the completed round as a read-only A5 landscape print projection."""
+
+    return templates.TemplateResponse(
+        request=request,
+        name="photo_print.html",
+        context={
+            "round_id": round_id,
+            "display_name": display_name,
+            "level": level,
+            "level_label": _LEVEL_LABELS[level],
+            "generated_artifact": generated_artifact,
+            "score": score,
+        },
+    )
+
+
 def render_public_leaderboard(request: Request, *, level: str, rows):
     """Render a persistent Top 4 leaderboard for the selected level."""
 

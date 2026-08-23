@@ -33,6 +33,7 @@ Ready
 → Generating
 → Result / Feedback
 → Leaderboard
+→ Photo Print
 → Ready
 ```
 
@@ -86,21 +87,37 @@ There is no separate Round Complete scene.
 The leaderboard shows only players in the selected school-level group. Each
 entry includes the rank, name, score, generated image, and full prompt text.
 
-The post-round leaderboard highlights the current player and returns to Ready
+The post-round leaderboard highlights the current player and returns to Photo Print
 after 15 seconds. The read-only leaderboard opened from Ready shows the Top 4,
 lets the visitor switch among all four level groups, and remains visible until
 the visitor chooses to return.
 
-Result / Feedback and Leaderboard remain separate scenes.
+### 8. Photo Print
+
+Photo Print is a read-only projection of the completed round. It shows the generated
+image without cropping, the display name, and the final score inside an attractive
+Photo Prompt frame sized for an A5 landscape sheet. The screen shows a printable
+preview and Thai-first instructions. Printing is user initiated through the browser's
+print dialog and may be repeated; the scene does not claim that paper was printed.
+There is no inactivity timeout. The player chooses `เสร็จแล้ว เริ่มเล่นเกมใหม่` to
+return to Ready.
+
+Result / Feedback, Leaderboard, and Photo Print remain separate scenes.
 
 ## Interaction Rules
 
 - Each scene has one clear next action where a player action is needed.
 - Passive scenes may advance automatically with a visible timeout.
+- Photo Print remains until the player explicitly returns to Ready; printing is
+  never automatic.
 - Meaningful player input is submitted explicitly, except when the fixed prompt
   countdown expires; then the current text is submitted automatically.
 - The round should not require an account, profile, or extra form.
 - The flow should remain usable as a kiosk experience without page scrolling.
+- Short arcade effects reinforce interaction, countdown, completion, score, and
+  recoverable failure; the game has no background music.
+- Sound starts enabled with a persistent speaker control on every scene. Audio
+  never carries information that is absent from the visible interface.
 
 ## Current Boundaries
 

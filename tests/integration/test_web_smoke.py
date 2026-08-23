@@ -24,11 +24,42 @@ def runtime_app(tmp_path: Path, materialized_catalog):
                 delattr(app.state, name)
 
 
+def test_short_landscape_layout_contract_prevents_scene_overlap() -> None:
+    base_template = Path(__file__).parents[2] / "src/app/templates/_base.html"
+    base_source = base_template.read_text(encoding="utf-8")
+
+    assert "@media (max-height: 960px) and (min-aspect-ratio: 3/2)" in base_source
+    assert "padding-top: 14vh;" in base_source
+    assert ".challenge-hero {" in base_source
+    assert "align-self: stretch;" in base_source
+
+    challenge_frame = base_source[
+        base_source.index("        .challenge-frame {") : base_source.index(
+            "        .challenge-frame::after"
+        )
+    ]
+    generating_frame = base_source[
+        base_source.index("        .generating-frame {") : base_source.index(
+            "        .generating-frame::after"
+        )
+    ]
+    result_frame = base_source[
+        base_source.index("        .result-frame {") : base_source.index(
+            "        .result-frame::after"
+        )
+    ]
+    for frame_rule in (challenge_frame, generating_frame):
+        assert "height: 100%;" in frame_rule
+        assert "max-height: 100%;" in frame_rule
+    assert "aspect-ratio: 16 / 9;" in result_frame
+
+
 def test_ready_starts_a_real_round_and_reaches_prompt(runtime_app) -> None:
     with TestClient(runtime_app) as client:
         ready = client.get("/")
         assert ready.status_code == 200
-        assert "เปลี่ยนภาพที่เห็น" in ready.text
+        assert "เกมท้าประลอง" in ready.text
+        assert "สร้างภาพกับ AI" in ready.text
         assert 'action="/rounds"' in ready.text
 
         start = client.post(

@@ -1,3 +1,5 @@
+import { playSound } from "./_sound.js";
+
 const root = document.querySelector("component-shell")?.shadowRoot ?? document;
 const form = root.querySelector<HTMLFormElement>("#prompt-form");
 const countdown = root.querySelector<HTMLElement>("#prompt-countdown");
@@ -8,6 +10,7 @@ if (form && countdown && reason) {
   const deadline = Date.parse(countdown.dataset.deadline ?? "");
   let submitted = false;
   let timer: number | undefined;
+  let lastTickSecond: number | undefined;
 
   const secondsUntilDeadline = (): number =>
     Math.min(
@@ -33,6 +36,10 @@ if (form && countdown && reason) {
   const updateCountdown = (): void => {
     const remaining = secondsUntilDeadline();
     renderCountdown(remaining);
+    if (remaining > 0 && remaining <= 5 && remaining !== lastTickSecond) {
+      lastTickSecond = remaining;
+      void playSound("countdown-tick");
+    }
     if (remaining === 0) {
       if (timer !== undefined) {
         globalThis.clearInterval(timer);

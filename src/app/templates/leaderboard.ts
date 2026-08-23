@@ -5,6 +5,10 @@ const countdown = root.querySelector<HTMLElement>(
 );
 const MAX_LEADERBOARD_SECONDS = 15;
 const deadline = Date.parse(scene?.dataset.leaderboardDeadline ?? "");
+const currentRoundId = scene?.dataset.currentRound;
+const photoPrintUrl = currentRoundId
+  ? `/rounds/${currentRoundId}/photo-print`
+  : undefined;
 
 if (scene && countdown && Number.isFinite(deadline)) {
   let navigationStarted = false;
@@ -17,7 +21,7 @@ if (scene && countdown && Number.isFinite(deadline)) {
       Math.max(0, Math.ceil((deadline - Date.now()) / 1000)),
     );
 
-  const navigateToReady = (): void => {
+  const navigateToPhotoPrint = (): void => {
     if (navigationStarted) {
       return;
     }
@@ -28,14 +32,14 @@ if (scene && countdown && Number.isFinite(deadline)) {
     if (timeoutId !== undefined) {
       globalThis.clearTimeout(timeoutId);
     }
-    location.assign("/");
+    location.assign(photoPrintUrl ?? "/");
   };
 
   const updateCountdown = (): void => {
     const secondsRemaining = secondsUntilDeadline();
     countdown.textContent = String(secondsRemaining);
     if (secondsRemaining === 0) {
-      navigateToReady();
+      navigateToPhotoPrint();
     }
   };
 
@@ -43,7 +47,7 @@ if (scene && countdown && Number.isFinite(deadline)) {
   if (!navigationStarted) {
     intervalId = globalThis.setInterval(updateCountdown, 1000);
     timeoutId = globalThis.setTimeout(
-      navigateToReady,
+      navigateToPhotoPrint,
       Math.max(0, deadline - Date.now()),
     );
   }

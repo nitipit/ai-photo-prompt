@@ -1,0 +1,94 @@
+{% extends "_base.html" %} {% block title %}พิมพ์ภาพ | Photo Prompt{% endblock %}
+{% block content %}
+<main
+  class="scene photo-print-scene"
+  data-scene="photo-print"
+  data-photo-print-data="completed-round-projection"
+  data-round-id="{{ round_id }}"
+>
+  <header class="scene-topbar">
+    <a class="brand" href="/" aria-label="กลับหน้าพร้อมเล่น">
+      <span class="brand-mark" aria-hidden="true">✦</span>
+      <span class="brand-name">PHOTO <strong>PROMPT</strong></span>
+    </a>
+    <p class="scene-tag">ภาพที่ระลึก · {{ level_label }}</p>
+  </header>
+
+  <div class="photo-print-layout">
+    <section
+      class="photo-print-preview"
+      aria-labelledby="photo-print-title"
+      data-screen-preview="a5-landscape"
+    >
+      <p class="photo-print-preview-label">ตัวอย่างกระดาษ A5 แนวนอน</p>
+      <div class="photo-print-sheet" data-print-sheet>
+        <div class="photo-print-inset">
+          <header class="photo-print-sheet-header">
+            <span class="photo-print-sheet-brand">
+              <span class="photo-print-sheet-mark" aria-hidden="true">✦</span>
+              PHOTO <strong>PROMPT</strong>
+            </span>
+            <span class="photo-print-sheet-badge">ภาพที่ระลึก</span>
+          </header>
+
+          <div class="photo-print-sheet-content">
+            <div class="photo-print-image-frame">
+              <img
+                class="photo-print-image"
+                src="{{ generated_artifact.url }}"
+                alt="ภาพที่สร้างของ {{ display_name }}"
+                data-generated-artifact="true"
+                data-image-source="stored-generated-artifact"
+                data-pipeline-provider="{{ generated_artifact.provider or '' }}"
+              />
+            </div>
+            <section class="photo-print-details" aria-label="รายละเอียดภาพ">
+              <p class="photo-print-kicker">ภาพจากไอเดียของ</p>
+              <h1 id="photo-print-title">{{ display_name }}</h1>
+              <div class="photo-print-score">
+                <span>คะแนนรอบนี้</span>
+                <strong data-score-source="stored-round-score"
+                >{{ score.total_score }}</strong>
+                <small>/ 100</small>
+              </div>
+              <p class="photo-print-caption">
+                เห็น · คิด · สั่ง · สร้าง
+              </p>
+            </section>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <aside
+      class="photo-print-instructions"
+      aria-labelledby="photo-print-instructions-title"
+    >
+      <p class="eyebrow">เก็บภาพจากรอบนี้ไว้</p>
+      <h2 id="photo-print-instructions-title">
+        พิมพ์ภาพของคุณ<br /><span>เป็นที่ระลึก</span>
+      </h2>
+      <ol class="photo-print-steps">
+        <li>กดปุ่มพิมพ์เพื่อเริ่มการพิมพ์</li>
+        <li>หากมีหน้าต่างพิมพ์ ให้เลือกเครื่องพิมพ์แล้วกดยืนยัน</li>
+      </ol>
+      <p class="photo-print-note">
+        เบราว์เซอร์อาจแสดงหน้าต่างพิมพ์ หรืออาจส่งงานไปยังเครื่องพิมพ์เริ่มต้นทันที
+        ระบบไม่สามารถตรวจสอบกระดาษที่พิมพ์ออกมาได้
+      </p>
+      <div class="photo-print-actions">
+        <kiosk-button>
+          <button id="print-photo-button" type="button">
+            พิมพ์ภาพนี้ <span aria-hidden="true">↗</span>
+          </button>
+        </kiosk-button>
+        <a class="photo-print-ready-link" href="/">
+          เสร็จแล้ว เริ่มเล่นเกมใหม่ <span aria-hidden="true">→</span>
+        </a>
+      </div>
+    </aside>
+  </div>
+</main>
+{% endblock %} {% block page_script %}
+<script type="module" src="/templates/photo_print.js"></script>
+{% endblock %}

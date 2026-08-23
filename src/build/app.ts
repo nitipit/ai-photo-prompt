@@ -3,9 +3,21 @@ import * as esbuild from "esbuild";
 const projectRoot = new URL("../../", import.meta.url);
 const sourceRoot = new URL("src/app/templates/", projectRoot);
 const outputRoot = new URL("dist/templates/", projectRoot);
+const audioSourceRoot = new URL("design/audio/", projectRoot);
+const audioOutputRoot = new URL("dist/audio/", projectRoot);
+const approvedAudioFiles = [
+  "ui-click.wav",
+  "prompt-submit.wav",
+  "countdown-tick.wav",
+  "generation-complete.wav",
+  "score-reveal.wav",
+  "generation-error.wav",
+] as const;
 
 await Deno.remove(outputRoot, { recursive: true }).catch(() => undefined);
 await Deno.mkdir(outputRoot, { recursive: true });
+await Deno.remove(audioOutputRoot, { recursive: true }).catch(() => undefined);
+await Deno.mkdir(audioOutputRoot, { recursive: true });
 
 try {
   const modules = await typeScriptModules(sourceRoot);
@@ -15,6 +27,7 @@ try {
 
   await buildModules(modules.filter((module) => !bridges.includes(module)));
   await buildBundles(bridges);
+  await publishApprovedAudio();
 } finally {
   esbuild.stop();
 }
@@ -50,6 +63,17 @@ function browserBuildOptions(modules: URL[]): esbuild.BuildOptions {
     platform: "browser",
     target: "es2022",
   };
+}
+
+async function publishApprovedAudio(): Promise<void> {
+  await Promise.all(
+    approvedAudioFiles.map((filename) =>
+      Deno.copyFile(
+        new URL(filename, audioSourceRoot),
+        new URL(filename, audioOutputRoot),
+      )
+    ),
+  );
 }
 
 async function typeScriptModules(directory: URL): Promise<URL[]> {

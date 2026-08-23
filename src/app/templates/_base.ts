@@ -1,4 +1,5 @@
 import "./_components/button.js";
+import { installSoundControls } from "./_sound.js";
 
 /** Own the one lightweight Shadow DOM boundary used by the kiosk shell. */
 class ComponentShell extends HTMLElement {
@@ -16,6 +17,7 @@ class ComponentShell extends HTMLElement {
     while (this.firstChild) {
       root.append(this.firstChild);
     }
+    installSoundControls(root);
   }
 }
 

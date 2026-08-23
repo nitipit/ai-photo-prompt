@@ -26,7 +26,7 @@ discoveries, patterns, problems, and next-step context.
 | `generating>passive then-image-reveal-5s` | 2026-08-07T23:34:12+07:00 |
 | `generating>reveal-generated-only` | 2026-08-07T23:38:39+07:00 |
 | `role>photo-prompt-product goals-ui-scenes no-implementation` | 2026-08-07T23:42:05+07:00 |
-| `ui>every-scene-content-viewport-16:9` | 2026-08-07T23:44:52+07:00 |
+| `ui>16:9 short-landscape height-aware no-crop` | 2026-08-23T18:29:24+07:00 |
 | `stack>fastapi-jinja-swup-shelfdb-dictify-adapter-arrowjs` | 2026-08-07T23:50:34+07:00 |
 | `role>photo-prompt-technical stack-guard` | 2026-08-07T23:50:34+07:00 |
 | `visual>playful-science-booth` | 2026-08-07T23:52:44+07:00 |
@@ -77,3 +77,6 @@ discoveries, patterns, problems, and next-step context.
 | `concurrency>claims-live-lease snapshot-cas cancellation-settle-cleanup` | 2026-08-13T23:16:00+07:00 |
 | `leaderboard>max-four-current-visible server-deadline` | 2026-08-13T23:16:00+07:00 |
 | `leaderboard>ready-access level-top4 persistent-no-timer` | 2026-08-17T03:06:50+07:00 |
+| `audio>arcade-sfx default-on persisted-mute nonblocking` | 2026-08-23T19:35:41+07:00 |
+| `next>generating-denoise hybrid-canvas no-extra-time deferred` | 2026-08-23T19:53:33+07:00 |
+| `print>A5-landscape framed-name-score window-print repeat manual-ready` | 2026-08-23T20:36:08+07:00 |
