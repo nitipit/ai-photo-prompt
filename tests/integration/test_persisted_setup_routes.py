@@ -30,7 +30,7 @@ def _stored_record(runtime_app, round_id: str):
     return asyncio.run(runtime_app.state.game_round_service.get_round(round_id))
 
 
-def _start_round(client: TestClient, *, display_name: str = "") -> str:
+def _start_round(client: TestClient, *, display_name: str = "Tester") -> str:
     response = client.post(
         "/rounds",
         data={"display_name": display_name},
@@ -119,6 +119,50 @@ def test_persisted_round_flow_stores_uuid_name_level_challenge_and_deadline(runt
         assert f'src="{selected.target_asset_url}"' in prompt.text
         assert f'data-deadline="{prompt_state.prompt_deadline}"' in prompt.text
         assert 'name="challenge_id"' not in prompt.text
+
+
+def test_ready_requires_combined_name_with_fifty_character_limit(runtime_app) -> None:
+    with TestClient(runtime_app) as client:
+        ready = client.get("/")
+        assert "สังเกตให้ดี คิดให้ชัด แล้วบอก AI ให้สร้างภาพให้ถูกต้อง" in ready.text
+        assert "ชื่อเล่น (ชั้นเรียน)" in ready.text
+        assert 'id="display-name"' in ready.text
+        assert 'maxlength="50"' in ready.text
+        assert " required" in ready.text
+        assert '<button id="start-button" type="submit" disabled>' in ready.text
+        assert "ไม่บังคับ" not in ready.text
+
+        assert client.post("/rounds", follow_redirects=False).status_code == 422
+        assert (
+            client.post(
+                "/rounds",
+                data={"display_name": ""},
+                follow_redirects=False,
+            ).status_code
+            == 422
+        )
+        whitespace = client.post(
+            "/rounds",
+            data={"display_name": "   "},
+            follow_redirects=False,
+        )
+        assert whitespace.status_code == 422
+        assert whitespace.json()["detail"] == "display name is required"
+
+        accepted = client.post(
+            "/rounds",
+            data={"display_name": "x" * 50},
+            follow_redirects=False,
+        )
+        assert accepted.status_code == 303
+
+        too_long = client.post(
+            "/rounds",
+            data={"display_name": "x" * 51},
+            follow_redirects=False,
+        )
+        assert too_long.status_code == 422
+        assert too_long.json()["detail"] == "display name must be at most 50 characters"
 
 
 def test_setup_routes_require_authoritative_scene_state_and_unknown_round_is_404(

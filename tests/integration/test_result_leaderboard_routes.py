@@ -569,7 +569,7 @@ def test_result_and_leaderboard_routes_map_missing_and_stale_rounds(runtime_app)
         assert client.get(f"/rounds/{missing_id}/photo-print").status_code == 404
         assert client.post(f"/rounds/{missing_id}/generating/continue").status_code == 404
 
-        started = client.post("/rounds", follow_redirects=False)
+        started = client.post("/rounds", data={"display_name": "Tester"}, follow_redirects=False)
         round_id = urlsplit(started.headers["location"]).path.split("/")[2]
         assert client.get(f"/rounds/{round_id}/result").status_code == 409
         assert client.post(f"/rounds/{round_id}/result/leaderboard").status_code == 409

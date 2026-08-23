@@ -111,7 +111,7 @@ def test_persisted_generation_reveals_artifact_and_reaches_result(
 ) -> None:
     prompt_text = "กระต่ายเชฟทำแพนเค้กยักษ์"
     with TestClient(runtime_app) as client:
-        start = client.post("/rounds", follow_redirects=False)
+        start = client.post("/rounds", data={"display_name": "Tester"}, follow_redirects=False)
         round_id = urlsplit(start.headers["location"]).path.split("/")[2]
         client.post(f"/rounds/{round_id}/level", data={"level": "p1-p3"})
         client.post(f"/rounds/{round_id}/challenge/continue")

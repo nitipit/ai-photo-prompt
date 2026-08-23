@@ -31,7 +31,7 @@ def _stored_record(runtime_app, round_id: str):
 
 
 def _start_generating(client: TestClient) -> str:
-    started = client.post("/rounds", follow_redirects=False)
+    started = client.post("/rounds", data={"display_name": "Tester"}, follow_redirects=False)
     assert started.status_code == 303
     round_id = urlsplit(started.headers["location"]).path.split("/")[2]
     configured = client.post(
@@ -178,7 +178,7 @@ def test_generation_run_maps_missing_and_stale_rounds(runtime_app) -> None:
         missing_status = client.get(f"/rounds/{unknown_id}/generating/status")
         assert missing_status.status_code == 404
 
-        started = client.post("/rounds", follow_redirects=False)
+        started = client.post("/rounds", data={"display_name": "Tester"}, follow_redirects=False)
         round_id = urlsplit(started.headers["location"]).path.split("/")[2]
         stale = client.post(f"/rounds/{round_id}/generating/run", follow_redirects=False)
         assert stale.status_code == 409

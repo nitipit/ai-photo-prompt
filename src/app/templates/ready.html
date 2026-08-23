@@ -17,22 +17,24 @@
         <span>สร้างภาพกับ AI</span>
       </h1>
       <p class="ready-lede">
-        สังเกตให้ดี คิดให้ชัด แล้วชวน AI สร้างภาพในแบบของคุณ
+        สังเกตให้ดี คิดให้ชัด แล้วบอก AI ให้สร้างภาพให้ถูกต้อง
       </p>
       <form id="start-form" action="/rounds" method="post">
         <label class="name-field">
-          <span>ชื่อเล่น <small>ไม่บังคับ</small></span>
+          <span>ชื่อเล่น (ชั้นเรียน)</span>
           <input
+            id="display-name"
             type="text"
             name="display_name"
-            maxlength="30"
-            placeholder="เช่น น้องฟ้า"
+            maxlength="50"
+            placeholder="เช่น น้องฟ้า (ป.3)"
             autocomplete="nickname"
+            required
           />
         </label>
         <div class="ready-actions">
           <kiosk-button>
-            <button id="start-button" type="submit">
+            <button id="start-button" type="submit" disabled>
               เริ่มเล่น <span aria-hidden="true">→</span>
             </button>
           </kiosk-button>

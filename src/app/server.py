@@ -346,9 +346,9 @@ async def ready(request: Request):
 @app.post("/rounds", status_code=303)
 async def start_round(
     request: Request,
-    display_name: str = Form(default=""),
+    display_name: str = Form(...),
 ) -> RedirectResponse:
-    """Create a durable anonymous-or-named round and open level selection."""
+    """Create a durable named round and open level selection."""
 
     try:
         record = await request.app.state.game_round_service.create_round(display_name)
