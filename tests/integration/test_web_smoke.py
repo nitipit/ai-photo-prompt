@@ -58,7 +58,8 @@ def test_ready_starts_a_real_round_and_reaches_prompt(runtime_app) -> None:
     with TestClient(runtime_app) as client:
         ready = client.get("/")
         assert ready.status_code == 200
-        assert "เปลี่ยนภาพที่เห็น" in ready.text
+        assert "เกมท้าประลอง" in ready.text
+        assert "สร้างภาพกับ AI" in ready.text
         assert 'action="/rounds"' in ready.text
 
         start = client.post(
