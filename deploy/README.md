@@ -19,7 +19,7 @@ rootful Caddy container or a different rootless `graphroot` with this setup.
    # Run the privileged linger step separately; replace the placeholder user.
    ROOTLESS_USER=photo-prompt-operator
    ssh -t kiosk-host sudo loginctl enable-linger "$ROOTLESS_USER"
-   ssh kiosk-host loginctl show-user "$ROOTLESS_USER" -p Linger --value
+   ssh kiosk-host 'loginctl show-user "$ROOTLESS_USER" -p Linger --value | grep -qx yes'
    ssh kiosk-host 'install -d -m 0755 "$HOME/.config/containers/systemd"'
    rsync -a \
      deploy/photo-prompt.network \
@@ -58,20 +58,18 @@ rootful Caddy container or a different rootless `graphroot` with this setup.
    operator-owned Quadlet source drop-in without editing the tracked base:
 
    ```bash
-   read -r -s -p 'Staff PIN: ' STAFF_PIN
-   printf '\n' >&2
-   if [[ ! "$STAFF_PIN" =~ ^[0-9]{6}$ ]]; then
-     unset STAFF_PIN
-     printf 'PIN must be exactly six digits.\n' >&2
-     exit 1
-   fi
-   printf %s "$STAFF_PIN" | ssh kiosk-host podman secret create photo-prompt-staff-pin -
-   status=$?
-   unset STAFF_PIN
-   exit "$status"
-
-   ssh kiosk-host 'install -d -m 0755 "$HOME/.config/containers/systemd/photo-prompt.container.d"'
-   ssh kiosk-host 'cat > "$HOME/.config/containers/systemd/photo-prompt.container.d/10-staff-secret.conf"' <<'EOF'
+   (
+     trap 'unset STAFF_PIN' EXIT
+     read -r -s -p 'Staff PIN: ' STAFF_PIN
+     printf '\n' >&2
+     if [[ ! "$STAFF_PIN" =~ ^[0-9]{6}$ ]]; then
+       printf 'PIN must be exactly six digits.\n' >&2
+       exit 1
+     fi
+     printf %s "$STAFF_PIN" | ssh kiosk-host podman secret create photo-prompt-staff-pin -
+   ) && \
+   ssh kiosk-host 'install -d -m 0755 "$HOME/.config/containers/systemd/photo-prompt.container.d"' && \
+   ssh kiosk-host 'cat > "$HOME/.config/containers/systemd/photo-prompt.container.d/10-staff-secret.conf"' <<'EOF' &&
    [Container]
    Secret=photo-prompt-staff-pin,type=env,target=PHOTO_PROMPT_STAFF_PIN
    EOF

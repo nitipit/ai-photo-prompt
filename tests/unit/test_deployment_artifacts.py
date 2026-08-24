@@ -627,6 +627,7 @@ def test_optional_secret_and_pod_level_network_are_documented() -> None:
     assert "Network=photo-prompt.network" in pod
     assert "Secret=photo-prompt-staff-pin,type=env,target=PHOTO_PROMPT_STAFF_PIN" in readme
     assert "photo-prompt.container.d/10-staff-secret.conf" in readme
+    assert "(\n     trap 'unset STAFF_PIN' EXIT" in readme
     assert "read -r -s -p 'Staff PIN: ' STAFF_PIN" in readme
     assert '[[ ! "$STAFF_PIN" =~ ^[0-9]{6}$ ]]' in readme
     assert (
@@ -634,10 +635,17 @@ def test_optional_secret_and_pod_level_network_are_documented() -> None:
         in readme
     )
     assert "ssh -t kiosk-host podman secret create" not in readme
+    assert "ssh kiosk-host 'install -d -m 0755" in readme
+    assert "photo-prompt.container.d\"' &&" in readme
+    assert "<<'EOF' &&" in readme
+    assert 'exit "$status"' not in readme
     assert "Without this drop-in" in readme
     assert "chmod 0644" in readme
     assert 'ssh -t kiosk-host sudo loginctl enable-linger "$ROOTLESS_USER"' in readme
-    assert 'loginctl show-user "$ROOTLESS_USER" -p Linger --value' in readme
+    assert (
+        "ssh kiosk-host 'loginctl show-user \"$ROOTLESS_USER\" -p Linger --value | grep -qx yes'"
+        in readme
+    )
     assert "systemctl --user enable" not in readme
     assert "systemctl --user start photo-prompt.service" not in readme
     assert "systemctl --user start photo-prompt-pod.service" not in readme
