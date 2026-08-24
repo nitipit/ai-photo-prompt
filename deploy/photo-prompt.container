@@ -7,7 +7,6 @@ After=photo-prompt.pod photo-prompt.network
 ContainerName=photo-prompt
 Image=localhost/photo-prompt:deploy
 Pod=photo-prompt.pod
-Network=photo-prompt.network
 User=10001:10001
 WorkingDir=/app
 Environment=PHOTO_PROMPT_CONFIG=/etc/photo-prompt/app.toml
@@ -16,7 +15,6 @@ Volume=photo-prompt-state:/var/lib/photo-prompt/state:rw
 Volume=photo-prompt-generated:/var/lib/photo-prompt/generated:rw
 Volume=photo-prompt-pi-home:/home/photo-prompt/.pi:rw
 Tmpfs=/run/photo-prompt:rw,size=512m
-Secret=photo-prompt-staff-pin,type=env,target=PHOTO_PROMPT_STAFF_PIN
 HealthCmd=/opt/venv/bin/python -c "import json,urllib.request; value=json.load(urllib.request.urlopen('http://127.0.0.1:8000/health',timeout=3)); raise SystemExit(0 if value.get('ready') is True else 1)"
 HealthInterval=30s
 HealthTimeout=5s

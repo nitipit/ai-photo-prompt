@@ -3,6 +3,7 @@ Description=Photo Prompt kiosk pod
 
 [Pod]
 PodName=photo-prompt
+Network=photo-prompt.network
 
 [Install]
 WantedBy=default.target
