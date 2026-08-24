@@ -578,7 +578,7 @@ def test_photo_print_layout_preserves_a5_content_and_uses_upper_scene_image() ->
     head_source = base_source.split("</head>", maxsplit=1)[0]
     print_source = base_source[
         base_source.index("        @media print {") : base_source.index(
-            "        @media (max-height", base_source.index("        @media print {")
+            "        @container kiosk-scene", base_source.index("        @media print {")
         )
     ]
     content_rule = base_source[

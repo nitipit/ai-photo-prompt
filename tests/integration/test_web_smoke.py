@@ -28,8 +28,14 @@ def test_short_landscape_layout_contract_prevents_scene_overlap() -> None:
     base_template = Path(__file__).parents[2] / "src/app/templates/_base.html"
     base_source = base_template.read_text(encoding="utf-8")
 
-    assert "@media (max-height: 960px) and (min-aspect-ratio: 3/2)" in base_source
-    assert "padding-top: 14vh;" in base_source
+    assert ".scene {" in base_source
+    assert "container: kiosk-scene / size;" in base_source
+    assert "@container kiosk-scene (max-height: 960px) and (min-aspect-ratio: 3/2)" in base_source
+    assert "@media (max-height: 960px) and (min-aspect-ratio: 3/2)" not in base_source
+    assert "padding-top: 13cqh;" in base_source
+    assert "padding-top: 14cqh;" in base_source
+    assert "padding-bottom: 3cqh;" in base_source
+    assert "padding-bottom: 4cqh;" in base_source
     assert ".challenge-hero {" in base_source
     assert "align-self: stretch;" in base_source
 

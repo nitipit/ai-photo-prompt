@@ -84,6 +84,7 @@
         }
 
         .scene {
+          container: kiosk-scene / size;
           position: relative;
           width: min(100vw, calc(100vh * 16 / 9));
           height: min(100vh, calc(100vw * 9 / 16));
@@ -2050,22 +2051,22 @@
           }
         }
 
-        @media (max-height: 960px) and (min-aspect-ratio: 3/2) {
+        @container kiosk-scene (max-height: 960px) and (min-aspect-ratio: 3/2) {
           .level-layout {
-            padding-top: 13vh;
-            padding-bottom: 4vh;
+            padding-top: 13cqh;
+            padding-bottom: 4cqh;
           }
 
           .challenge-layout,
           .prompt-layout,
           .generating-layout {
-            padding-top: 14vh;
-            padding-bottom: 3vh;
+            padding-top: 14cqh;
+            padding-bottom: 3cqh;
           }
 
           .result-layout {
-            padding-top: 13vh;
-            padding-bottom: 3vh;
+            padding-top: 13cqh;
+            padding-bottom: 3cqh;
           }
         }
 
