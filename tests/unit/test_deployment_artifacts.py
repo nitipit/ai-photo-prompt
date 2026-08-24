@@ -266,7 +266,7 @@ def test_readiness_poll_tolerates_temporary_exec_and_non_ready_results(
     deploy_module._wait_until_ready("kiosk-host")
 
 
-def test_deploy_orders_config_gate_idle_gate_switch_restart_and_cleanup(
+def test_deploy_orders_config_gate_idle_gate_switch_stop_start_and_cleanup(
     deploy_module: ModuleType, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     events: list[tuple[str, tuple[str, ...]]] = []
@@ -318,9 +318,10 @@ def test_deploy_orders_config_gate_idle_gate_switch_restart_and_cleanup(
     tag_index = remote_commands.index(
         ("podman", "tag", "localhost/photo-prompt:abc123", deploy_module.DEPLOY_TAG)
     )
-    restart_index = remote_commands.index(("systemctl", "--user", "restart", deploy_module.SERVICE))
+    stop_index = remote_commands.index(("systemctl", "--user", "stop", deploy_module.SERVICE))
+    start_index = remote_commands.index(("systemctl", "--user", "start", deploy_module.SERVICE))
     cleanup_index = remote_commands.index(("rm", "-f", deploy_module.REMOTE_IMAGE))
-    assert config_index < idle_index < tag_index < restart_index < cleanup_index
+    assert config_index < idle_index < tag_index < stop_index < start_index < cleanup_index
     config_command = remote_commands[config_index]
     assert "localhost/photo-prompt:abc123" in config_command
     assert "/home/operator/photo-prompt/app.toml:/etc/photo-prompt/app.toml:ro,z" in config_command
@@ -331,7 +332,7 @@ def test_deploy_orders_config_gate_idle_gate_switch_restart_and_cleanup(
     assert health_calls == 2
 
 
-def test_initial_deploy_skips_missing_container_health_and_restarts(
+def test_initial_deploy_skips_missing_container_health_and_starts_fresh(
     deploy_module: ModuleType, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     events: list[tuple[str, ...]] = []
@@ -366,7 +367,11 @@ def test_initial_deploy_skips_missing_container_health_and_restarts(
 
     assert ("podman", "container", "exists", "photo-prompt") in events
     assert ("podman", "tag", "localhost/photo-prompt:abc123", deploy_module.DEPLOY_TAG) in events
-    assert ("systemctl", "--user", "restart", deploy_module.SERVICE) in events
+    stop = ("systemctl", "--user", "stop", deploy_module.SERVICE)
+    start = ("systemctl", "--user", "start", deploy_module.SERVICE)
+    assert stop in events
+    assert start in events
+    assert events.index(stop) < events.index(start)
     assert health_calls == 1
 
 

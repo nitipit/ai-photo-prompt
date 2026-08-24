@@ -99,7 +99,7 @@ podman pull --platform linux/amd64 \
 
 Before every release, sync all tracked Quadlet source files to the same
 rootless remote user and reload that user's manager. This does not start the
-pod or application; the first app start is `deploy.py`'s restart after the
+pod or application; the first app start is `deploy.py`'s fresh start after the
 image tag is switched:
 
 ```bash
@@ -235,8 +235,9 @@ image remotely. Before changing the service, it validates the host's active
 `~/photo-prompt/app.toml` by mounting it read-only into the new image. If the
 existing app container is present, its non-sensitive health projection must be
 valid and idle; an absent container is treated as the first deployment. It tags
-the new image as `:deploy`, restarts the service, polls readiness for a bounded
-deadline, and removes the transferred archive. A failed health check
+the new image as `:deploy`, settles a service stop, starts it fresh so systemd
+can recreate the stopped pod dependency, polls readiness for a bounded deadline,
+and removes the transferred archive. A failed health check
 returns an error without automatic recovery; retain the SHA-tagged image for
 AI-assisted manual recovery requiring separate explicit remote approval. It
 never runs a global prune. Quadlet units are started by dependency and explicit

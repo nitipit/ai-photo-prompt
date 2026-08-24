@@ -257,7 +257,12 @@ def deploy(*, host: str) -> None:
             if _remote_container_exists(host):
                 _require_idle(_remote_health(host))
             remote(host, ("podman", "tag", image_tag, DEPLOY_TAG))
-            remote(host, ("systemctl", "--user", "restart", SERVICE))
+            # A Podman pod with exit-policy=stop becomes inactive when its only
+            # app container is removed. A single systemd restart transaction can
+            # then fail its pod dependency; a settled stop followed by a fresh
+            # start lets systemd recreate the pod before starting the app.
+            remote(host, ("systemctl", "--user", "stop", SERVICE))
+            remote(host, ("systemctl", "--user", "start", SERVICE))
             _wait_until_ready(host)
         except Exception as error:
             primary_error = error
