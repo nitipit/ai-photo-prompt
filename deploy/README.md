@@ -52,10 +52,11 @@ The preflight requires `HEAD == origin/main`, builds frontend assets and the
 image locally, tags the image by the exact commit SHA, transfers only the OCI
 image archive, verifies its SHA-256 after transfer, and loads the SHA-tagged
 image remotely. Before changing the service, it validates the host's active
-`~/photo-prompt/app.toml` by mounting it read-only into the new image, then
-aborts when the non-sensitive health projection reports an active generation.
-It tags the new image as `:deploy`, restarts the service, polls readiness for a
-bounded deadline, and removes the transferred archive. A failed health check
+`~/photo-prompt/app.toml` by mounting it read-only into the new image. If the
+existing app container is present, its non-sensitive health projection must be
+valid and idle; an absent container is treated as the first deployment. It tags
+the new image as `:deploy`, restarts the service, polls readiness for a bounded
+deadline, and removes the transferred archive. A failed health check
 returns an error without automatic recovery; retain the SHA-tagged image for
 AI-assisted manual recovery requiring separate explicit remote approval. It
 never runs a global prune.

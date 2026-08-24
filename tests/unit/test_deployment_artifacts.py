@@ -210,6 +210,8 @@ def test_deploy_orders_config_gate_idle_gate_switch_restart_and_cleanup(
         events.append(("remote", args))
         if args[:2] == ("sha256sum", deploy_module.REMOTE_IMAGE):
             return deploy_module.CommandResult(f"{image_sha}  {deploy_module.REMOTE_IMAGE}\n")
+        if args == ("podman", "container", "exists", "photo-prompt"):
+            return deploy_module.CommandResult()
         if args[:3] == ("podman", "exec", "photo-prompt"):
             health_calls += 1
             return deploy_module.CommandResult(
@@ -244,6 +246,77 @@ def test_deploy_orders_config_gate_idle_gate_switch_restart_and_cleanup(
     assert "--pull=never" in config_command
     assert not any(args[:2] == ("podman", "volume") for args in remote_commands)
     assert health_calls == 2
+
+
+def test_initial_deploy_skips_missing_container_health_and_restarts(
+    deploy_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    events: list[tuple[str, ...]] = []
+    image_bytes = b"oci image"
+    image_sha = hashlib.sha256(image_bytes).hexdigest()
+    health_calls = 0
+    monkeypatch.setattr(deploy_module, "preflight", lambda: "abc123")
+
+    def fake_run(args: tuple[str, ...], **_: Any) -> Any:
+        events.append(args)
+        if args[:2] == ("podman", "save"):
+            Path(args[3]).write_bytes(image_bytes)
+        return deploy_module.CommandResult()
+
+    def fake_remote(_host: str, args: tuple[str, ...], **_: Any) -> Any:
+        nonlocal health_calls
+        events.append(args)
+        if args[:2] == ("sha256sum", deploy_module.REMOTE_IMAGE):
+            return deploy_module.CommandResult(f"{image_sha}  {deploy_module.REMOTE_IMAGE}\n")
+        if args == ("podman", "container", "exists", "photo-prompt"):
+            return deploy_module.CommandResult(returncode=1)
+        if args[:3] == ("podman", "exec", "photo-prompt"):
+            health_calls += 1
+            return deploy_module.CommandResult('{"ready":true,"active_generation_count":0}')
+        return deploy_module.CommandResult()
+
+    monkeypatch.setattr(deploy_module, "run_command", fake_run)
+    monkeypatch.setattr(deploy_module, "remote", fake_remote)
+    deploy_module.deploy(host="kiosk-host", remote_root="/srv/photo-prompt")
+
+    assert ("podman", "container", "exists", "photo-prompt") in events
+    assert ("podman", "tag", "localhost/photo-prompt:abc123", deploy_module.DEPLOY_TAG) in events
+    assert ("systemctl", "--user", "restart", deploy_module.SERVICE) in events
+    assert health_calls == 1
+
+
+def test_existing_unhealthy_container_aborts_before_switch(
+    deploy_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    events: list[tuple[str, ...]] = []
+    image_bytes = b"oci image"
+    image_sha = hashlib.sha256(image_bytes).hexdigest()
+    monkeypatch.setattr(deploy_module, "preflight", lambda: "abc123")
+
+    def fake_run(args: tuple[str, ...], **_: Any) -> Any:
+        events.append(args)
+        if args[:2] == ("podman", "save"):
+            Path(args[3]).write_bytes(image_bytes)
+        return deploy_module.CommandResult()
+
+    def fake_remote(_host: str, args: tuple[str, ...], **_: Any) -> Any:
+        events.append(args)
+        if args[:2] == ("sha256sum", deploy_module.REMOTE_IMAGE):
+            return deploy_module.CommandResult(f"{image_sha}  {deploy_module.REMOTE_IMAGE}\n")
+        if args == ("podman", "container", "exists", "photo-prompt"):
+            return deploy_module.CommandResult()
+        if args[:3] == ("podman", "exec", "photo-prompt"):
+            return deploy_module.CommandResult(returncode=1)
+        return deploy_module.CommandResult()
+
+    monkeypatch.setattr(deploy_module, "run_command", fake_run)
+    monkeypatch.setattr(deploy_module, "remote", fake_remote)
+    with pytest.raises(deploy_module.RemoteHealthUnavailable):
+        deploy_module.deploy(host="kiosk-host", remote_root="/srv/photo-prompt")
+
+    assert not any(args[:2] == ("podman", "tag") for args in events)
+    assert not any(args[:2] == ("systemctl", "--user") for args in events)
+    assert events[-1] == ("rm", "-f", deploy_module.REMOTE_IMAGE)
 
 
 def test_invalid_active_config_aborts_before_idle_gate_or_switch(

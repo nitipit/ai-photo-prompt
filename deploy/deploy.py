@@ -127,6 +127,15 @@ def _remote_sha256(host: str, path: str, expected: str) -> None:
         raise DeployError(f"remote SHA-256 verification failed for {path}")
 
 
+def _remote_container_exists(host: str) -> bool:
+    result = remote(host, ("podman", "container", "exists", "photo-prompt"), check=False)
+    if result.returncode == 0:
+        return True
+    if result.returncode == 1:
+        return False
+    raise DeployError("could not determine whether the remote app container exists")
+
+
 def _remote_health(host: str) -> dict[str, object]:
     """Read only the non-sensitive health projection inside the app container."""
 
@@ -232,7 +241,8 @@ def deploy(*, host: str, remote_root: str = DEPLOY_ROOT) -> None:
             remote(host, ("podman", "load", "--input", REMOTE_IMAGE))
             resolved_root = _resolve_remote_root(host, remote_root)
             _remote_validate_active_config(host, resolved_root, image_tag)
-            _require_idle(_remote_health(host))
+            if _remote_container_exists(host):
+                _require_idle(_remote_health(host))
             remote(host, ("podman", "tag", image_tag, DEPLOY_TAG))
             remote(host, ("systemctl", "--user", "restart", SERVICE))
             _wait_until_ready(host)
