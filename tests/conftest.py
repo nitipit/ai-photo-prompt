@@ -8,9 +8,10 @@ from uuid import uuid4
 
 import pytest
 
-from app.config import AI_PROVIDER_ENV
+from app.ai import FakeAIPipeline
 from app.content.importer import materialize_challenges
 from app.domain.models import GameState, RoundRecord
+from app.server import app
 
 ROOT = Path(__file__).resolve().parents[1]
 CHALLENGE_SOURCE = ROOT / "design" / "challenges"
@@ -18,10 +19,13 @@ FIXED_TIMESTAMP = datetime(2026, 1, 1, tzinfo=UTC).isoformat()
 
 
 @pytest.fixture(autouse=True)
-def explicit_fake_ai_provider(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Keep deterministic tests explicit now that startup has no provider default."""
+def explicit_fake_ai_provider() -> None:
+    """Inject deterministic fake AI; production startup is always Pi-backed."""
 
-    monkeypatch.setenv(AI_PROVIDER_ENV, "fake")
+    app.state.ai_pipeline = FakeAIPipeline()
+    yield
+    if hasattr(app.state, "ai_pipeline"):
+        delattr(app.state, "ai_pipeline")
 
 
 @pytest.fixture

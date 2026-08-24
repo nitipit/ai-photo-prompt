@@ -292,6 +292,12 @@ class GameRoundService:
         finally:
             self._active_generation_tasks.discard(task)
 
+    @property
+    def active_generation_count(self) -> int:
+        """Return active top-level attempts for the non-sensitive health view."""
+
+        return sum(1 for task in self._active_generation_tasks if not task.done())
+
     async def close(self) -> None:
         """Stop generation admission and settle every active top-level attempt.
 

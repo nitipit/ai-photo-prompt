@@ -167,6 +167,7 @@ def make_pipeline(
     rpc: Any,
     *,
     store: FakeStore | None = None,
+    max_concurrent_attempts: int = 1,
 ) -> tuple[PiAIPipeline, FakeStore]:
     actual_store = store or FakeStore(tmp_path)
     return (
@@ -178,6 +179,7 @@ def make_pipeline(
             rpc,
             max_stdout_bytes=1024,
             max_stderr_bytes=1024,
+            max_concurrent_attempts=max_concurrent_attempts,
         ),
         actual_store,
     )
@@ -318,6 +320,67 @@ async def test_second_pipeline_attempt_returns_busy_without_rpc_or_workspace(
     assert second.failure.code == "pi_busy"
     assert completed.status is PipelineResultStatus.SUCCESS
     assert calls == 2
+
+
+@pytest.mark.asyncio
+async def test_three_process_wide_slots_and_fourth_busy_across_pipeline_instances(
+    tmp_path: Path, challenge: ChallengeSpec
+) -> None:
+    started = asyncio.Event()
+    release = asyncio.Event()
+    started_count = 0
+    calls = 0
+
+    async def rpc(request: PiRPCRequest) -> PiRPCResult:
+        nonlocal started_count, calls
+        calls += 1
+        if request.argv == ("pi-image",):
+            Path(request.cwd, "generated.png").write_bytes(b"generated-image")
+            started_count += 1
+            if started_count == 3:
+                started.set()
+            await release.wait()
+            return rpc_result(image=True)
+        return rpc_result(assistant_text=evaluation_text())
+
+    pipelines = [
+        make_pipeline(
+            tmp_path,
+            challenge,
+            rpc,
+            store=FakeStore(tmp_path / f"pipeline-{index}"),
+            max_concurrent_attempts=3,
+        )
+        for index in range(4)
+    ]
+    first_three = [
+        asyncio.create_task(
+            pipelines[index][0].run(
+                challenge,
+                f"prompt-{index}",
+                5,
+                attempt=ATTEMPT,
+            )
+        )
+        for index in range(3)
+    ]
+    await started.wait()
+    fourth = await pipelines[3][0].run(
+        challenge,
+        "prompt-four",
+        5,
+        attempt=GenerationAttempt(round_id="round-4", attempt_token="attempt-4"),
+    )
+    assert fourth.failure is not None and fourth.failure.code == "pi_busy"
+    assert not pipelines[3][1].workspace.exists()
+    assert calls == 3
+
+    release.set()
+    results = await asyncio.gather(*first_three)
+    assert all(result.status is PipelineResultStatus.SUCCESS for result in results), [
+        result.failure.dict() if result.failure is not None else result.dict() for result in results
+    ]
+    assert calls == 6
 
 
 @pytest.mark.asyncio

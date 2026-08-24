@@ -68,8 +68,10 @@ export const setSoundMuted = (nextMuted: boolean): void => {
   );
 };
 
+const tabMayPlaySound = (): boolean => document.visibilityState === "visible";
+
 export const playSound = async (cue: SoundCue): Promise<boolean> => {
-  if (muted) {
+  if (muted || !tabMayPlaySound()) {
     return false;
   }
   stopPlayers();
@@ -101,6 +103,12 @@ const soundCueFromPath = (path: EventTarget[]): SoundCue | null => {
   }
   return null;
 };
+
+document.addEventListener("visibilitychange", () => {
+  if (!tabMayPlaySound()) {
+    stopPlayers();
+  }
+});
 
 const installInteractionSounds = (root: ShadowRoot): void => {
   root.addEventListener(

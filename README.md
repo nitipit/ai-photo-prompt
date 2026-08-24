@@ -9,10 +9,10 @@ deno task app:build
 deno task app:serve
 ```
 
-`app:serve` explicitly sets `PHOTO_PROMPT_AI_PROVIDER=pi`; startup rejects a
-missing provider selection rather than falling back to fake AI. The machine must have `pi`
-available, a signed-in Codex account, and
-`~/.pi/agent/extensions/codex-bridge.ts`. No separate API key is required.
+`app:serve` loads the complete `conf/app.toml`; startup always constructs the
+configured Pi provider and never falls back to fake AI. Copy `conf/app.sample.toml`
+to the ignored active path for deployment. The machine must have the pinned `pi`
+runtime and a signed-in Codex account. No separate API key is required.
 Generated images are retained under `data/generated/`.
 
 Open <http://127.0.0.1:8000/>. Press **เริ่มเล่น** to create a persisted
@@ -20,11 +20,8 @@ round through `POST /rounds`; the server redirects its UUID to Level Selection.
 Image generation and evaluation may take about one minute. A bounded provider
 failure remains on Generating and can be retried or abandoned.
 
-Use deterministic fake AI explicitly for local tests or UI work:
-
-```bash
-PHOTO_PROMPT_AI_PROVIDER=fake uv run uvicorn app.server:app --app-dir src --reload
-```
+Deterministic fake AI is available only by explicit `app.state.ai_pipeline`
+dependency injection in tests and controlled local browser verification.
 
 Focused checks (build first so generated challenge assets are available):
 
@@ -32,5 +29,5 @@ Focused checks (build first so generated challenge assets are available):
 deno task app:build
 deno task check
 deno task lint
-PHOTO_PROMPT_AI_PROVIDER=fake uv run pytest tests/integration/test_web_smoke.py
+uv run pytest tests/integration/test_web_smoke.py
 ```

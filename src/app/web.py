@@ -27,7 +27,12 @@ _LEVEL_LABELS = dict(_LEVEL_OPTIONS)
 def render_ready(request: Request):
     """Render the attract screen for the next player."""
 
-    return templates.TemplateResponse(request=request, name="ready.html", context={})
+    staff_auth = getattr(request.app.state, "staff_auth", None)
+    return templates.TemplateResponse(
+        request=request,
+        name="ready.html",
+        context={"staff_available": bool(staff_auth and staff_auth.available)},
+    )
 
 
 def render_level_selection(request: Request, round_id: str):
@@ -76,6 +81,8 @@ def render_photo_print(
     level: str,
     generated_artifact: ImageArtifact,
     score: ScoreResult,
+    return_url: str = "/",
+    print_available: bool = True,
 ):
     """Render the completed round as a read-only A5 landscape print projection."""
 
@@ -89,7 +96,29 @@ def render_photo_print(
             "level_label": _LEVEL_LABELS[level],
             "generated_artifact": generated_artifact,
             "score": score,
+            "return_url": return_url,
+            "print_available": print_available,
         },
+    )
+
+
+def render_staff_login(request: Request, *, csrf_token: str, error: str | None = None):
+    """Render the PIN form without reflecting the PIN or player data."""
+
+    return templates.TemplateResponse(
+        request=request,
+        name="staff_login.html",
+        context={"csrf_token": csrf_token, "error": error},
+    )
+
+
+def render_staff_search(request: Request, *, page, csrf_token: str):
+    """Render a private, four-row paginated search projection."""
+
+    return templates.TemplateResponse(
+        request=request,
+        name="staff_search.html",
+        context={"search_page": page, "csrf_token": csrf_token},
     )
 
 

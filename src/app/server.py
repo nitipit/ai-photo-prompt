@@ -1,7 +1,6 @@
 """FastAPI entry point for the first visible Photo Prompt checkpoint."""
 
 import asyncio
-import os
 import random
 import shutil
 from collections.abc import AsyncIterator
@@ -17,24 +16,17 @@ from fastapi.staticfiles import StaticFiles
 from shelfdb.shelf import DB  # type: ignore[import-untyped]
 from starlette.routing import Mount
 
-from .ai import FakeAIPipeline
 from .ai.generated_artifacts import GeneratedArtifactStore
 from .ai.pi_pipeline import PiAIPipeline
 from .config import (
-    AI_PROVIDER_ENV,
     DEFAULT_CATALOG_PATH,
     DEFAULT_DB_PATH,
     DEFAULT_GENERATED_ROOT,
-    DEFAULT_PI_BRIDGE_PATH,
-    DEFAULT_PI_EVALUATOR_THINKING,
     DEFAULT_PI_EXECUTABLE,
-    DEFAULT_PI_IMAGE_THINKING,
-    DEFAULT_PI_MAX_OUTPUT_BYTES,
-    DEFAULT_PI_MODEL,
-    DEFAULT_PI_PROVIDER,
-    DEFAULT_PI_TIMEOUT_SECONDS,
-    DEFAULT_PI_WORKSPACE_ROOT,
     DIST_DIR,
+    ConfigError,
+    RuntimeConfig,
+    load_config,
 )
 from .content.repository import ChallengeCatalog
 from .domain.models import (
@@ -55,11 +47,25 @@ from .persistence import (
     ShelfDbRoundRepository,
 )
 from .services import (
+    AIPipelineRunner,
     GameRoundConflictError,
     GameRoundDeadlineError,
     GameRoundService,
     GameRoundValidationError,
     GenerationStatus,
+)
+from .services.staff import (
+    LOGIN_CSRF_COOKIE,
+    SESSION_COOKIE,
+    SESSION_MAX_AGE,
+    SESSION_PATH,
+    StaffAuth,
+    StaffCooldownError,
+    StaffCSRFError,
+    StaffLoginError,
+    StaffUnavailableError,
+    artifact_is_available,
+    search_completed_rounds,
 )
 from .web import (
     render_challenge_reveal,
@@ -71,6 +77,8 @@ from .web import (
     render_public_leaderboard,
     render_ready,
     render_result,
+    render_staff_login,
+    render_staff_search,
 )
 
 _DEFAULT_ARTIFACT_RECONCILIATION_MAX_ENTRIES = 10_000
@@ -80,14 +88,42 @@ _DEFAULT_ARTIFACT_RECONCILIATION_MAX_ENTRIES = 10_000
 async def lifespan(application: FastAPI) -> AsyncIterator[None]:
     """Own the one-process local runtime dependencies for the application."""
 
-    catalog_path = Path(getattr(application.state, "catalog_path", DEFAULT_CATALOG_PATH))
-    db_path = Path(getattr(application.state, "db_path", DEFAULT_DB_PATH))
+    application.state.staff_auth = StaffAuth()
+    injected_pipeline = getattr(application.state, "ai_pipeline", None)
+    runtime_config: RuntimeConfig | None = getattr(application.state, "runtime_config", None)
+    if runtime_config is None and injected_pipeline is None:
+        try:
+            runtime_config = load_config()
+        except ConfigError as error:
+            raise RuntimeError(str(error)) from error
+    application.state.runtime_config = runtime_config
+
+    config_paths = runtime_config.paths if runtime_config is not None else None
+    catalog_path = Path(
+        getattr(
+            application.state,
+            "catalog_path",
+            config_paths.catalog_path if config_paths else DEFAULT_CATALOG_PATH,
+        )
+    )
+    db_path = Path(
+        getattr(
+            application.state,
+            "db_path",
+            config_paths.db_path if config_paths else DEFAULT_DB_PATH,
+        )
+    )
     configured_generated_root = Path(
-        getattr(application.state, "generated_root", DEFAULT_GENERATED_ROOT)
+        getattr(
+            application.state,
+            "generated_root",
+            config_paths.generated_root if config_paths else DEFAULT_GENERATED_ROOT,
+        )
     )
     pipeline, artifact_store, provider_timeout = _build_ai_pipeline(
         application,
         configured_generated_root,
+        runtime_config,
     )
     generated_root = _prepare_runtime_directory(
         artifact_store.published_root if artifact_store is not None else configured_generated_root,
@@ -118,7 +154,13 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
                 max_entries=reconciliation_limit,
             )
         claim_lease_duration = timedelta(
-            seconds=float(getattr(application.state, "claim_lease_seconds", 30.0))
+            seconds=float(
+                getattr(
+                    application.state,
+                    "claim_lease_seconds",
+                    runtime_config.pi.claim_lease_seconds if runtime_config else 30.0,
+                )
+            )
         )
         generation_claims = ShelfDbGenerationClaims(
             db,
@@ -135,7 +177,13 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
             owner_instance=str(uuid4()),
             claim_lease_duration=claim_lease_duration,
             claim_heartbeat_interval=timedelta(
-                seconds=float(getattr(application.state, "claim_heartbeat_seconds", 5.0))
+                seconds=float(
+                    getattr(
+                        application.state,
+                        "claim_heartbeat_seconds",
+                        runtime_config.pi.claim_heartbeat_seconds if runtime_config else 5.0,
+                    )
+                )
             ),
             provider_timeout=provider_timeout,
         )
@@ -147,7 +195,7 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
         application.state.artifact_store = artifact_store
         application.state.artifact_reconciliation = artifact_reconciliation
         application.state.active_ai_provider = (
-            "pi" if isinstance(pipeline, PiAIPipeline) else "fake"
+            "pi" if isinstance(pipeline, PiAIPipeline) else "injected"
         )
         application.state.game_round_service = game_round_service
         yield
@@ -170,16 +218,21 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
                     "artifact_reconciliation",
                     "active_ai_provider",
                     "game_round_service",
+                    "runtime_config",
+                    "staff_auth",
                 ):
                     if hasattr(application.state, name):
                         delattr(application.state, name)
 
 
 def _artifact_reconciliation_limit(application: FastAPI) -> int:
+    runtime_config = getattr(application.state, "runtime_config", None)
     value = getattr(
         application.state,
         "artifact_reconciliation_max_entries",
-        _DEFAULT_ARTIFACT_RECONCILIATION_MAX_ENTRIES,
+        runtime_config.pi.reconciliation_max_entries
+        if runtime_config is not None
+        else _DEFAULT_ARTIFACT_RECONCILIATION_MAX_ENTRIES,
     )
     if type(value) is not int or value <= 0:
         raise ValueError("artifact_reconciliation_max_entries must be a positive integer")
@@ -189,36 +242,38 @@ def _artifact_reconciliation_limit(application: FastAPI) -> int:
 def _build_ai_pipeline(
     application: FastAPI,
     generated_root: Path,
-) -> tuple[FakeAIPipeline | PiAIPipeline, GeneratedArtifactStore | None, float]:
-    """Build the explicitly selected provider without silent fallback."""
+    runtime_config: RuntimeConfig | None,
+) -> tuple[AIPipelineRunner, GeneratedArtifactStore | None, float]:
+    """Build production Pi from the validated config or use explicit DI in tests."""
 
-    configured = (
-        application.state.ai_provider
-        if hasattr(application.state, "ai_provider")
-        else os.environ.get(AI_PROVIDER_ENV)
-    )
-    if configured is None or not str(configured).strip():
-        raise RuntimeError(
-            f"{AI_PROVIDER_ENV} must explicitly select the 'fake' or 'pi' AI provider"
+    injected = getattr(application.state, "ai_pipeline", None)
+    if injected is not None:
+        if not hasattr(injected, "run") or not hasattr(injected, "rollback_attempt"):
+            raise RuntimeError("injected AI pipeline does not implement the pipeline boundary")
+        return (
+            injected,
+            getattr(application.state, "artifact_store", None),
+            float(getattr(application.state, "provider_timeout", 10.0)),
         )
-    selected = str(configured).strip()
-    if selected == "fake":
-        return FakeAIPipeline(), None, 10.0
-    if selected != "pi":
-        raise RuntimeError(f"unsupported AI provider: {selected!r}")
+    if runtime_config is None:
+        raise RuntimeError("runtime configuration is required when no AI pipeline is injected")
 
-    executable = str(getattr(application.state, "pi_executable", DEFAULT_PI_EXECUTABLE))
-    resolved_executable = shutil.which(executable)
+    pi = runtime_config.pi
+    resolved_executable = shutil.which(DEFAULT_PI_EXECUTABLE)
     if resolved_executable is None:
         raise RuntimeError("Pi AI provider is configured but the pi executable is unavailable")
-    bridge_path = Path(getattr(application.state, "pi_bridge_path", DEFAULT_PI_BRIDGE_PATH))
+    bridge_path = runtime_config.paths.pi_bridge_path
     if not bridge_path.is_file():
         raise RuntimeError("Pi AI provider is configured but the Codex bridge is unavailable")
 
-    workspace_root = Path(
-        getattr(application.state, "pi_workspace_root", DEFAULT_PI_WORKSPACE_ROOT)
+    workspace_root = runtime_config.paths.pi_workspace_root
+    artifact_store = GeneratedArtifactStore(
+        workspace_root,
+        generated_root,
+        max_bytes=pi.max_artifact_bytes,
+        max_width=pi.max_artifact_width,
+        max_height=pi.max_artifact_height,
     )
-    artifact_store = GeneratedArtifactStore(workspace_root, generated_root)
     workspace_root = _prepare_runtime_directory(
         artifact_store.private_root,
         "Pi workspace root",
@@ -227,13 +282,11 @@ def _build_ai_pipeline(
         artifact_store.published_root,
         "generated artifact root",
     )
-    provider = str(getattr(application.state, "pi_provider", DEFAULT_PI_PROVIDER))
-    model = str(getattr(application.state, "pi_model", DEFAULT_PI_MODEL))
     image_argv = _pi_rpc_argv(
         resolved_executable,
-        provider,
-        model,
-        str(getattr(application.state, "pi_image_thinking", DEFAULT_PI_IMAGE_THINKING)),
+        pi.provider,
+        pi.model,
+        pi.image_thinking,
     ) + (
         "--extension",
         str(bridge_path),
@@ -243,31 +296,21 @@ def _build_ai_pipeline(
     )
     evaluator_argv = _pi_rpc_argv(
         resolved_executable,
-        provider,
-        model,
-        str(
-            getattr(
-                application.state,
-                "pi_evaluator_thinking",
-                DEFAULT_PI_EVALUATOR_THINKING,
-            )
-        ),
+        pi.provider,
+        pi.model,
+        pi.evaluator_thinking,
     ) + ("--no-tools",)
-    timeout = float(getattr(application.state, "provider_timeout", DEFAULT_PI_TIMEOUT_SECONDS))
     pipeline = PiAIPipeline(
         image_argv=image_argv,
         evaluator_argv=evaluator_argv,
-        target_static_root=Path(getattr(application.state, "dist_root", DIST_DIR)),
+        target_static_root=runtime_config.paths.target_static_root,
         artifact_store=artifact_store,
-        max_stdout_bytes=int(
-            getattr(application.state, "pi_max_output_bytes", DEFAULT_PI_MAX_OUTPUT_BYTES)
-        ),
-        max_stderr_bytes=int(
-            getattr(application.state, "pi_max_output_bytes", DEFAULT_PI_MAX_OUTPUT_BYTES)
-        ),
+        max_stdout_bytes=pi.max_stdout_bytes,
+        max_stderr_bytes=pi.max_stderr_bytes,
         rpc_cwd=workspace_root,
+        max_concurrent_attempts=pi.max_concurrent_attempts,
     )
-    return pipeline, artifact_store, timeout
+    return pipeline, artifact_store, pi.timeout_seconds
 
 
 def _prepare_runtime_directory(path: Path, label: str) -> Path:
@@ -341,6 +384,168 @@ async def ready(request: Request):
     """Render the global Ready scene."""
 
     return render_ready(request)
+
+
+@app.get("/health")
+async def health(request: Request):
+    """Expose readiness and active generation count, without player data."""
+
+    service = getattr(request.app.state, "game_round_service", None)
+    if service is None:
+        return JSONResponse(status_code=503, content={"ready": False, "active_generation_count": 0})
+    return {
+        "ready": True,
+        "active_generation_count": service.active_generation_count,
+    }
+
+
+@app.get("/staff/login", response_class=HTMLResponse)
+async def staff_login_page(request: Request):
+    """Show the staff PIN form only when a valid secret is configured."""
+
+    auth = _staff_auth(request)
+    if not auth.available:
+        raise HTTPException(status_code=404, detail="Staff search is unavailable")
+    token = auth.issue_login_csrf()
+    if token is None:
+        raise HTTPException(status_code=404, detail="Staff search is unavailable")
+    response = render_staff_login(request, csrf_token=token)
+    _mark_staff_no_store(response)
+    response.set_cookie(
+        LOGIN_CSRF_COOKIE,
+        token,
+        max_age=900,
+        secure=True,
+        httponly=False,
+        samesite="strict",
+        path=SESSION_PATH,
+    )
+    return response
+
+
+@app.post("/staff/login", status_code=303)
+async def staff_login(
+    request: Request,
+    pin: str = Form(default=""),
+    csrf: str = Form(default=""),
+):
+    """Authenticate a staff member without reflecting secrets or player data."""
+
+    auth = _staff_auth(request)
+    if not auth.available:
+        raise HTTPException(status_code=404, detail="Staff search is unavailable")
+    client_key = request.client.host if request.client is not None else "unknown"
+    try:
+        token = auth.verify_login(
+            pin,
+            csrf,
+            request.cookies.get(LOGIN_CSRF_COOKIE),
+            client_key,
+        )
+    except StaffUnavailableError as error:
+        raise HTTPException(status_code=404, detail="Staff search is unavailable") from error
+    except StaffCSRFError as error:
+        raise HTTPException(status_code=403, detail="Invalid CSRF token") from error
+    except StaffCooldownError:
+        response = render_staff_login(request, csrf_token=csrf, error="ลองใหม่อีกครั้งภายหลัง")
+        return _staff_response(response, status_code=429)
+    except StaffLoginError:
+        response = render_staff_login(request, csrf_token=csrf, error="PIN ไม่ถูกต้อง")
+        return _staff_response(response, status_code=401)
+    response = RedirectResponse(url="/staff/search", status_code=303)
+    _mark_staff_no_store(response)
+    _set_staff_session_cookie(response, token)
+    return response
+
+
+@app.get("/staff/search", response_class=HTMLResponse)
+async def staff_search_page(request: Request, page: str = "1"):
+    """Render the private latest/search result page; the URL contains page only."""
+
+    session = _require_staff_session(request)
+    requested_page = _safe_page(page)
+    session.page = requested_page
+    result = _staff_search_projection(request, session.search_term, requested_page)
+    response = render_staff_search(request, page=result, csrf_token=session.csrf_token)
+    _mark_staff_no_store(response)
+    return response
+
+
+@app.post("/staff/search", status_code=303)
+async def staff_search_submit(
+    request: Request,
+    query: str = Form(default=""),
+    csrf: str = Form(default=""),
+):
+    """Store a bounded private search term in the opaque session state."""
+
+    session = _require_staff_session(request)
+    _require_staff_csrf(request, session, csrf)
+    session.search_term = query.strip()[:50]
+    session.page = 1
+    response = RedirectResponse(url="/staff/search?page=1", status_code=303)
+    _mark_staff_no_store(response)
+    return response
+
+
+@app.post("/staff/search/clear", status_code=303)
+async def staff_search_clear(request: Request, csrf: str = Form(default="")):
+    """Reset private search state to newest completed rounds."""
+
+    session = _require_staff_session(request)
+    _require_staff_csrf(request, session, csrf)
+    session.search_term = ""
+    session.page = 1
+    response = RedirectResponse(url="/staff/search?page=1", status_code=303)
+    _mark_staff_no_store(response)
+    return response
+
+
+@app.post("/staff/logout", status_code=303)
+async def staff_logout(request: Request, csrf: str = Form(default="")):
+    """Invalidate the opaque session and return to the kiosk Ready scene."""
+
+    session = _require_staff_session(request)
+    _require_staff_csrf(request, session, csrf)
+    auth = _staff_auth(request)
+    auth.logout(request.cookies.get(SESSION_COOKIE))
+    response = RedirectResponse(url="/", status_code=303)
+    _mark_staff_no_store(response)
+    response.delete_cookie(SESSION_COOKIE, path=SESSION_PATH)
+    return response
+
+
+@app.get("/staff/rounds/{round_id}/photo-print", response_class=HTMLResponse)
+async def staff_photo_print(request: Request, round_id: str, page: str = ""):
+    """Render the existing A5 print projection for an authenticated staff member."""
+
+    session = _require_staff_session(request)
+    requested_page = _safe_page(page) if page else session.page
+    session.page = requested_page
+    try:
+        record = await asyncio.to_thread(request.app.state.round_repository.get, round_id)
+    except RoundNotFoundError as error:
+        raise HTTPException(status_code=404, detail="Round not found") from error
+    if record.terminal_disposition is not TerminalDisposition.COMPLETED:
+        raise HTTPException(status_code=409, detail="Photo Print requires a completed round")
+    if record.generated_artifact is None or record.score is None or record.level is None:
+        raise HTTPException(status_code=422, detail="Photo Print data is incomplete")
+    request.state.round_display_name = record.display_name
+    generated_root = _staff_generated_root(request)
+    if not artifact_is_available(record.generated_artifact.url, generated_root):
+        raise HTTPException(status_code=409, detail="Image is unavailable")
+    response = render_photo_print(
+        request,
+        round_id,
+        display_name=record.display_name,
+        level=record.level.value if record.level else "",
+        generated_artifact=record.generated_artifact,
+        score=record.score,
+        return_url=f"/staff/search?page={requested_page}",
+        print_available=True,
+    )
+    _mark_staff_no_store(response)
+    return response
 
 
 @app.post("/rounds", status_code=303)
@@ -684,6 +889,78 @@ async def photo_print_scene(request: Request, round_id: str):
     )
 
 
+def _staff_auth(request: Request) -> StaffAuth:
+    auth = getattr(request.app.state, "staff_auth", None)
+    if not isinstance(auth, StaffAuth):
+        raise HTTPException(status_code=404, detail="Staff search is unavailable")
+    return auth
+
+
+def _require_staff_session(request: Request):
+    auth = _staff_auth(request)
+    if not auth.available:
+        raise HTTPException(status_code=404, detail="Staff search is unavailable")
+    session = auth.session(request.cookies.get(SESSION_COOKIE))
+    if session is None:
+        raise HTTPException(
+            status_code=303,
+            detail="Staff login required",
+            headers={"Location": "/staff/login"},
+        )
+    return session
+
+
+def _require_staff_csrf(request: Request, session, csrf: str) -> None:
+    if not _staff_auth(request).verify_csrf(session, csrf):
+        raise HTTPException(status_code=403, detail="Invalid CSRF token")
+
+
+def _safe_page(value: str) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return 1
+    return min(max(parsed, 1), 1_000_000)
+
+
+def _staff_generated_root(request: Request) -> Path:
+    store = getattr(request.app.state, "artifact_store", None)
+    if isinstance(store, GeneratedArtifactStore):
+        return store.published_root
+    return Path(getattr(request.app.state, "generated_root", DEFAULT_GENERATED_ROOT)).resolve()
+
+
+def _staff_search_projection(request: Request, term: str, page: int):
+    return search_completed_rounds(
+        request.app.state.round_repository,
+        _staff_generated_root(request),
+        term=term,
+        page=page,
+    )
+
+
+def _mark_staff_no_store(response) -> None:
+    response.headers["Cache-Control"] = "no-store"
+
+
+def _staff_response(response, *, status_code: int):
+    response.status_code = status_code
+    _mark_staff_no_store(response)
+    return response
+
+
+def _set_staff_session_cookie(response, token: str) -> None:
+    response.set_cookie(
+        SESSION_COOKIE,
+        token,
+        max_age=SESSION_MAX_AGE,
+        secure=True,
+        httponly=True,
+        samesite="strict",
+        path=SESSION_PATH,
+    )
+
+
 async def _run_generation(request: Request, round_id: str) -> RedirectResponse:
     """Map one generation attempt's service outcomes to the native route contract."""
 
@@ -704,7 +981,9 @@ async def _require_round_context(request: Request, round_id: str):
     """Load one durable round, mapping repository errors to route contracts."""
 
     try:
-        return await request.app.state.game_round_service.get_round(round_id)
+        record = await request.app.state.game_round_service.get_round(round_id)
+        request.state.round_display_name = record.display_name
+        return record
     except RoundNotFoundError as error:
         raise HTTPException(status_code=404, detail="Round not found") from error
     except GameRoundValidationError as error:

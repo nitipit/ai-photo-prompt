@@ -1,0 +1,17 @@
+.git
+.agents
+data
+conf/app.toml
+*.env
+*.secret
+*.key
+*.pem
+*.p12
+discord-webhook
+.venv
+__pycache__
+*.py[cod]
+node_modules
+*.shelfdb
+*.sqlite*
+*.log

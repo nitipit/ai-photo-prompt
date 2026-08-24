@@ -1,0 +1,9 @@
+[Unit]
+Description=Dedicated Photo Prompt network
+
+[Network]
+NetworkName=photo-prompt.network
+Driver=bridge
+
+[Install]
+WantedBy=default.target

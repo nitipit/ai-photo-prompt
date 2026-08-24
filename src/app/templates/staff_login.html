@@ -1,0 +1,82 @@
+{% extends "_base.html" %} {% block title %}เข้าสู่ระบบเจ้าหน้าที่ | Photo Prompt{%
+endblock %} {% block content %}
+<main class="scene staff-scene" data-scene="staff-login">
+  <style>
+    .staff-panel {
+      display: grid;
+      align-content: center;
+      justify-items: center;
+      height: 100%;
+      padding: 12% 8%;
+      text-align: center;
+    }
+    .staff-card {
+      display: grid;
+      gap: 1rem;
+      width: min(100%, 30rem);
+      border: 1px solid rgba(157, 181, 189, 0.3);
+      border-radius: 1.2rem;
+      padding: 2rem;
+      background: rgba(12, 41, 65, 0.82);
+    }
+    .staff-card h1 {
+      font-size: clamp(1.7rem, 3vw, 3rem);
+    }
+    .staff-card label {
+      display: grid;
+      gap: 0.45rem;
+      text-align: left;
+      color: var(--paper);
+      font-weight: 700;
+    }
+    .staff-card input {
+      min-height: 3.2rem;
+      border: 1px solid rgba(157, 181, 189, 0.42);
+      border-radius: 0.75rem;
+      padding: 0.7rem;
+      background: rgba(7, 26, 45, 0.65);
+      color: var(--paper);
+      letter-spacing: 0.35em;
+      text-align: center;
+    }
+    .staff-error {
+      margin: 0;
+      color: var(--coral);
+    }
+    .staff-back {
+      color: var(--muted);
+      font-size: 0.9rem;
+    }
+  </style>
+  <header class="scene-topbar">
+    <a class="brand" href="/" aria-label="กลับหน้าพร้อมเล่น"><span
+        class="brand-mark"
+        aria-hidden="true"
+      >✦</span><span class="brand-name">PHOTO <strong>PROMPT</strong></span></a>
+    <p class="scene-tag">สำหรับเจ้าหน้าที่</p>
+  </header>
+  <section class="staff-panel" aria-labelledby="staff-login-title">
+    <form class="staff-card" action="/staff/login" method="post">
+      <p class="eyebrow">พื้นที่เจ้าหน้าที่</p>
+      <h1 id="staff-login-title">ค้นหาผู้เล่น</h1>
+      <label for="staff-pin">รหัส PIN 6 หลัก</label>
+      <input
+        id="staff-pin"
+        name="pin"
+        inputmode="numeric"
+        pattern="[0-9]{6}"
+        maxlength="6"
+        autocomplete="one-time-code"
+        required
+      />
+      <input type="hidden" name="csrf" value="{{ csrf_token }}" />
+      {% if error %}<p class="staff-error" role="alert">{{ error }}</p>{% endif
+      %}
+      <kiosk-button><button type="submit">
+          เข้าสู่ระบบ <span aria-hidden="true">→</span>
+        </button></kiosk-button>
+      <a class="staff-back" href="/">กลับหน้าพร้อมเล่น</a>
+    </form>
+  </section>
+</main>
+{% endblock %}

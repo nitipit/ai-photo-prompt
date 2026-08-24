@@ -1,0 +1,8 @@
+[Unit]
+Description=Photo Prompt ShelfDB state volume
+
+[Volume]
+VolumeName=photo-prompt-state
+
+[Install]
+WantedBy=default.target

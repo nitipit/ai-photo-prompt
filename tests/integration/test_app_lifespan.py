@@ -18,7 +18,7 @@ from app.ai.generated_artifacts import GeneratedArtifactStore
 from app.ai.pi_rpc import PiRPCRequest, run_pi_rpc
 from app.ai.protocols import GenerationAttempt
 from app.ai.results import AIPipelineResult
-from app.config import AI_PROVIDER_ENV, DEFAULT_GENERATED_ROOT
+from app.config import DEFAULT_GENERATED_ROOT
 from app.content.repository import CatalogValidationError, ChallengeCatalog
 from app.domain.models import (
     ChallengeSpec,
@@ -134,10 +134,7 @@ def runtime_app(tmp_path: Path, materialized_catalog):
     for name in (
         "db_path",
         "catalog_path",
-        "ai_provider",
-        "pi_executable",
-        "pi_bridge_path",
-        "pi_workspace_root",
+        "artifact_store",
         "generated_root",
         "dist_root",
         "provider_timeout",
@@ -145,6 +142,32 @@ def runtime_app(tmp_path: Path, materialized_catalog):
     ):
         if hasattr(app.state, name):
             delattr(app.state, name)
+
+
+def _configure_pi_injection(
+    runtime_app,
+    tmp_path: Path,
+    *,
+    private_root: Path | None = None,
+    generated_root: Path | None = None,
+    provider_timeout: float = 240.0,
+) -> GeneratedArtifactStore:
+    private = private_root or tmp_path / "pi-rpc"
+    generated = generated_root or tmp_path / "generated"
+    store = GeneratedArtifactStore(private, generated)
+    runtime_app.state.ai_pipeline = PiAIPipeline(
+        image_argv=(sys.executable, "--tools", "codex_imagegen"),
+        evaluator_argv=(sys.executable,),
+        target_static_root=tmp_path / "dist",
+        artifact_store=store,
+        max_stdout_bytes=32 * 1024 * 1024,
+        max_stderr_bytes=32 * 1024 * 1024,
+    )
+    runtime_app.state.artifact_store = store
+    runtime_app.state.generated_root = generated
+    runtime_app.state.dist_root = tmp_path / "dist"
+    runtime_app.state.provider_timeout = provider_timeout
+    return store
 
 
 def test_lifespan_exposes_typed_runtime_state_and_closes_db(
@@ -199,15 +222,7 @@ def test_pi_provider_is_explicit_and_never_falls_back_to_fake(
     runtime_app,
     tmp_path: Path,
 ) -> None:
-    bridge = tmp_path / "codex-bridge.ts"
-    bridge.write_text("// startup presence check", encoding="utf-8")
-    runtime_app.state.ai_provider = "pi"
-    runtime_app.state.pi_executable = sys.executable
-    runtime_app.state.pi_bridge_path = bridge
-    runtime_app.state.pi_workspace_root = tmp_path / "pi-rpc"
-    runtime_app.state.generated_root = tmp_path / "generated"
-    runtime_app.state.dist_root = tmp_path / "dist"
-    runtime_app.state.provider_timeout = 240.0
+    _configure_pi_injection(runtime_app, tmp_path, provider_timeout=240.0)
 
     with TestClient(runtime_app) as client:
         service = runtime_app.state.game_round_service
@@ -241,18 +256,14 @@ def test_pi_startup_reconciles_staging_and_unreferenced_public_artifacts(
     runtime_app,
     tmp_path: Path,
 ) -> None:
-    bridge = tmp_path / "codex-bridge.ts"
-    bridge.write_text("// startup presence check", encoding="utf-8")
     private_root = tmp_path / "pi-rpc"
     generated_root = tmp_path / "generated"
-    runtime_app.state.ai_provider = "pi"
-    runtime_app.state.pi_executable = sys.executable
-    runtime_app.state.pi_bridge_path = bridge
-    runtime_app.state.pi_workspace_root = private_root
-    runtime_app.state.generated_root = generated_root
-    runtime_app.state.dist_root = tmp_path / "dist"
-
-    store = GeneratedArtifactStore(private_root, generated_root)
+    store = _configure_pi_injection(
+        runtime_app,
+        tmp_path,
+        private_root=private_root,
+        generated_root=generated_root,
+    )
     referenced = GenerationAttempt(round_id=str(uuid4()), attempt_token=str(uuid4()))
     orphan = GenerationAttempt(round_id=str(uuid4()), attempt_token=str(uuid4()))
     referenced_workspace = store.prepare_workspace(referenced)
@@ -322,19 +333,15 @@ def test_pi_startup_custom_reference_limit_fails_before_artifact_deletion(
     runtime_app,
     tmp_path: Path,
 ) -> None:
-    bridge = tmp_path / "codex-bridge.ts"
-    bridge.write_text("// startup presence check", encoding="utf-8")
     private_root = tmp_path / "pi-rpc"
     generated_root = tmp_path / "generated"
-    runtime_app.state.ai_provider = "pi"
-    runtime_app.state.pi_executable = sys.executable
-    runtime_app.state.pi_bridge_path = bridge
-    runtime_app.state.pi_workspace_root = private_root
-    runtime_app.state.generated_root = generated_root
-    runtime_app.state.dist_root = tmp_path / "dist"
+    store = _configure_pi_injection(
+        runtime_app,
+        tmp_path,
+        private_root=private_root,
+        generated_root=generated_root,
+    )
     runtime_app.state.artifact_reconciliation_max_entries = 1
-
-    store = GeneratedArtifactStore(private_root, generated_root)
     orphan = GenerationAttempt(round_id=str(uuid4()), attempt_token=str(uuid4()))
     workspace = store.prepare_workspace(orphan)
     workspace.staged_path.write_bytes(_valid_png())
@@ -371,14 +378,7 @@ def test_pi_startup_rejects_non_positive_or_untyped_reconciliation_limit(
     tmp_path: Path,
     invalid_limit: object,
 ) -> None:
-    bridge = tmp_path / "codex-bridge.ts"
-    bridge.write_text("// startup presence check", encoding="utf-8")
-    runtime_app.state.ai_provider = "pi"
-    runtime_app.state.pi_executable = sys.executable
-    runtime_app.state.pi_bridge_path = bridge
-    runtime_app.state.pi_workspace_root = tmp_path / "pi-rpc"
-    runtime_app.state.generated_root = tmp_path / "generated"
-    runtime_app.state.dist_root = tmp_path / "dist"
+    _configure_pi_injection(runtime_app, tmp_path)
     runtime_app.state.artifact_reconciliation_max_entries = invalid_limit
 
     with pytest.raises(ValueError, match="must be a positive integer"):
@@ -388,14 +388,11 @@ def test_pi_startup_rejects_non_positive_or_untyped_reconciliation_limit(
     assert not hasattr(runtime_app.state, "artifact_reconciliation")
 
 
-def test_missing_ai_provider_fails_without_opening_db(
-    runtime_app,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.delenv(AI_PROVIDER_ENV, raising=False)
+def test_missing_runtime_configuration_fails_without_opening_db(runtime_app) -> None:
+    delattr(runtime_app.state, "ai_pipeline")
     db_path = runtime_app.state.db_path
 
-    with pytest.raises(RuntimeError, match="must explicitly select"):
+    with pytest.raises(RuntimeError, match="active configuration file is missing"):
         with TestClient(runtime_app):
             pass
 
@@ -403,29 +400,14 @@ def test_missing_ai_provider_fails_without_opening_db(
     assert not hasattr(runtime_app.state, "db")
 
 
-def test_pi_preflight_failure_never_falls_back_or_opens_db(runtime_app, tmp_path: Path) -> None:
-    runtime_app.state.ai_provider = "pi"
-    runtime_app.state.pi_executable = str(tmp_path / "missing-pi")
-    db_path = runtime_app.state.db_path
-
-    with pytest.raises(RuntimeError, match="pi executable is unavailable"):
-        with TestClient(runtime_app):
-            pass
-
-    assert not db_path.exists()
-    assert not hasattr(runtime_app.state, "db")
+def test_explicit_pipeline_injection_does_not_require_pi_host_prerequisites(runtime_app) -> None:
+    with TestClient(runtime_app):
+        assert runtime_app.state.active_ai_provider == "injected"
+        assert isinstance(runtime_app.state.game_round_service._pipeline, FakeAIPipeline)
 
 
-def test_unknown_ai_provider_fails_without_opening_db(runtime_app, tmp_path: Path) -> None:
-    runtime_app.state.ai_provider = "unknown"
-    db_path = runtime_app.state.db_path
-
-    with pytest.raises(RuntimeError, match="unsupported AI provider"):
-        with TestClient(runtime_app):
-            pass
-
-    assert not db_path.exists()
-    assert not hasattr(runtime_app.state, "db")
+def test_runtime_provider_is_not_a_selectable_compatibility_state(runtime_app) -> None:
+    assert not hasattr(runtime_app.state, "ai_provider")
 
 
 def test_service_round_survives_lifespan_reopen(runtime_app) -> None:

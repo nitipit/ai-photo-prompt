@@ -1,0 +1,8 @@
+[Unit]
+Description=Photo Prompt generated artifacts volume
+
+[Volume]
+VolumeName=photo-prompt-generated
+
+[Install]
+WantedBy=default.target

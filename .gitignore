@@ -4,5 +4,6 @@ __pycache__/
 node_modules/
 dist/
 data/
+conf/app.toml
 discord-webhook
 .agents/tool-state/

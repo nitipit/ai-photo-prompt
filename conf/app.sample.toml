@@ -1,0 +1,26 @@
+schema_version = 1
+
+[paths]
+state_dir = "data/state"
+db_path = "data/state/photo-prompt.shelfdb"
+catalog_path = "dist/catalog.json"
+generated_root = "data/generated"
+pi_workspace_root = "data/pi-rpc"
+pi_bridge_path = "deploy/codex-bridge.ts"
+target_static_root = "dist"
+
+[pi]
+provider = "openai-codex"
+model = "gpt-5.6-luna"
+image_thinking = "minimal"
+evaluator_thinking = "medium"
+timeout_seconds = 240.0
+max_stdout_bytes = 33554432
+max_stderr_bytes = 33554432
+max_artifact_bytes = 20971520
+max_artifact_width = 4096
+max_artifact_height = 4096
+reconciliation_max_entries = 10000
+claim_lease_seconds = 30.0
+claim_heartbeat_seconds = 5.0
+max_concurrent_attempts = 3

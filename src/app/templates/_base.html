@@ -4,7 +4,11 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="theme-color" content="#071a2d" />
-    <title>{% block title %}Photo Prompt{% endblock %}</title>
+    <title>
+      {% block title %}Photo Prompt{% endblock %}{% if
+      request.state.round_display_name|default("") %} · {{
+      request.state.round_display_name }}{% endif %}
+    </title>
     <style>
       html, body {
         width: 100%;

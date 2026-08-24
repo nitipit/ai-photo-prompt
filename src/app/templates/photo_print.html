@@ -5,6 +5,7 @@
   data-scene="photo-print"
   data-photo-print-data="completed-round-projection"
   data-round-id="{{ round_id }}"
+  data-return-url="{{ return_url }}"
 >
   <header class="scene-topbar">
     <a class="brand" href="/" aria-label="กลับหน้าพร้อมเล่น">
@@ -78,12 +79,26 @@
       </p>
       <div class="photo-print-actions">
         <kiosk-button>
-          <button id="print-photo-button" type="button">
-            พิมพ์ภาพนี้ <span aria-hidden="true">↗</span>
+          <button
+            id="print-photo-button"
+            type="button"
+            {%
+            if
+            not
+            print_available
+            %}
+            disabled{%
+            endif
+            %}
+          >
+            {% if print_available %}พิมพ์ภาพนี้ <span aria-hidden="true">↗</span>{%
+            else %}ภาพไม่พร้อม{% endif %}
           </button>
         </kiosk-button>
-        <a class="photo-print-ready-link" href="/">
-          เสร็จแล้ว เริ่มเล่นเกมใหม่ <span aria-hidden="true">→</span>
+        <a class="photo-print-ready-link" href="{{ return_url }}">
+          {% if return_url == "/" %}เสร็จแล้ว เริ่มเล่นเกมใหม่{% else
+          %}กลับไปค้นหาผู้เล่น{% endif %}
+          <span aria-hidden="true">→</span>
         </a>
       </div>
     </aside>

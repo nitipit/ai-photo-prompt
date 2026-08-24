@@ -1,0 +1,8 @@
+[Unit]
+Description=Photo Prompt kiosk pod
+
+[Pod]
+PodName=photo-prompt
+
+[Install]
+WantedBy=default.target

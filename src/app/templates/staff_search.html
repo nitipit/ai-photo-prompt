@@ -1,0 +1,227 @@
+{% extends "_base.html" %} {% block title %}ค้นหาผู้เล่น | Photo Prompt{% endblock
+%} {% block content %}
+<main
+  class="scene staff-scene"
+  data-scene="staff-search"
+  data-page="{{ search_page.page }}"
+>
+  <style>
+    .staff-search-layout {
+      display: grid;
+      grid-template-rows: auto auto minmax(0, 1fr) auto;
+      gap: 0.65rem;
+      height: 100%;
+      padding: 10% 6% 4%;
+    }
+    .staff-search-heading {
+      display: flex;
+      align-items: end;
+      justify-content: space-between;
+      gap: 1rem;
+    }
+    .staff-search-heading h1 {
+      font-size: clamp(1.8rem, 3vw, 3.1rem);
+    }
+    .staff-search-tools {
+      display: flex;
+      align-items: center;
+      gap: 0.55rem;
+    }
+    .staff-search-tools input {
+      width: min(34rem, 48vw);
+      min-height: 2.7rem;
+      border: 1px solid rgba(157, 181, 189, 0.42);
+      border-radius: 999px;
+      padding: 0.5rem 1rem;
+      background: rgba(7, 26, 45, 0.6);
+      color: var(--paper);
+    }
+    .staff-small-button, .staff-link {
+      min-height: 2.55rem;
+      border: 1px solid rgba(157, 181, 189, 0.42);
+      border-radius: 999px;
+      padding: 0.45rem 0.9rem;
+      background: transparent;
+      color: var(--paper);
+      cursor: pointer;
+    }
+    .staff-link {
+      display: inline-flex;
+      align-items: center;
+    }
+    .staff-search-list {
+      display: grid;
+      grid-template-rows: repeat(4, minmax(0, 1fr));
+      gap: 0.42rem;
+      min-height: 0;
+      margin: 0;
+      padding: 0;
+      list-style: none;
+    }
+    .staff-row {
+      display: grid;
+      grid-template-columns: 7rem minmax(0, 1fr) 8rem 8rem;
+      align-items: center;
+      gap: 0.8rem;
+      min-height: 0;
+      border: 1px solid rgba(157, 181, 189, 0.25);
+      border-radius: 0.75rem;
+      padding: 0.4rem 0.7rem;
+      background: rgba(12, 41, 65, 0.78);
+    }
+    .staff-thumb {
+      display: grid;
+      width: 100%;
+      aspect-ratio: 16 / 9;
+      place-items: center;
+      overflow: hidden;
+      border-radius: 0.4rem;
+      background: #123c57;
+      color: var(--muted);
+      font-size: 0.68rem;
+      text-align: center;
+    }
+    .staff-thumb img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+    .staff-name {
+      min-width: 0;
+      color: var(--paper);
+      font-weight: 800;
+      overflow-wrap: anywhere;
+    }
+    .staff-meta {
+      display: grid;
+      gap: 0.1rem;
+      color: var(--muted);
+      font-size: 0.75rem;
+    }
+    .staff-score {
+      color: var(--gold);
+      font-size: 1.3rem;
+      font-weight: 800;
+      text-align: right;
+    }
+    .staff-actions {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 1rem;
+    }
+    .staff-pagination {
+      display: flex;
+      gap: 0.5rem;
+    }
+    .staff-muted {
+      color: var(--muted);
+      font-size: 0.8rem;
+    }
+    .staff-disabled {
+      color: var(--muted);
+      font-size: 0.72rem;
+      text-align: right;
+    }
+    @media (max-width: 800px) {
+      .staff-row {
+        grid-template-columns: 5rem minmax(0, 1fr) 5rem;
+      }
+      .staff-row .staff-actions-cell {
+        display: none;
+      }
+    }
+  </style>
+  <header class="scene-topbar">
+    <a class="brand" href="/" aria-label="กลับหน้าพร้อมเล่น"><span
+        class="brand-mark"
+        aria-hidden="true"
+      >✦</span><span class="brand-name">PHOTO <strong>PROMPT</strong></span></a>
+    <form action="/staff/logout" method="post">
+      <input type="hidden" name="csrf" value="{{ csrf_token }}" /><button
+        class="staff-small-button"
+        type="submit"
+      >
+        ออกจากระบบ
+      </button>
+    </form>
+  </header>
+  <div class="staff-search-layout">
+    <section class="staff-search-heading" aria-labelledby="staff-search-title">
+      <div>
+        <p class="eyebrow">พื้นที่เจ้าหน้าที่</p>
+        <h1 id="staff-search-title">ค้นหาผู้เล่น</h1>
+      </div>
+      <form class="staff-search-tools" action="/staff/search" method="post">
+        <input
+          name="query"
+          type="search"
+          maxlength="50"
+          value="{{ search_page.term }}"
+          placeholder="ชื่อเล่น (ชั้นเรียน)"
+          aria-label="ค้นหาชื่อผู้เล่น"
+        />
+        <input type="hidden" name="csrf" value="{{ csrf_token }}" />
+        <button class="staff-small-button" type="submit">ค้นหา</button>
+      </form>
+    </section>
+    <div class="staff-actions">
+      <span class="staff-muted"
+      >{% if search_page.term %}ผลการค้นหา “{{ search_page.term }}”{% else
+        %}รอบล่าสุด{% endif %} · {{ search_page.total }} รอบ</span><form
+        action="/staff/search/clear"
+        method="post"
+      >
+        <input type="hidden" name="csrf" value="{{ csrf_token }}" /><button
+          class="staff-small-button"
+          type="submit"
+        >
+          ล้างการค้นหา
+        </button>
+      </form>
+    </div>
+    <ol class="staff-search-list" aria-label="ผลการค้นหา">
+      {% for row in search_page.rows %}
+      <li class="staff-row">
+        <div class="staff-thumb">
+          {% if row.image_available %}<img
+            src="{{ row.image_url }}"
+            alt="ภาพของ {{ row.display_name }}"
+          />{% else %}<span>ภาพไม่พร้อม</span>{% endif %}
+        </div>
+        <div class="staff-name">{{ row.display_name }}</div>
+        <div class="staff-meta">
+          <span>{{ row.level }}</span><time datetime="{{ row.completed_at }}"
+          >{{ row.formatted_completed_at }}</time>
+        </div>
+        <div class="staff-actions-cell">
+          {% if row.image_available %}<a
+            class="staff-link"
+            href="/staff/rounds/{{ row.round_id }}/photo-print?page={{ search_page.page }}"
+          >พิมพ์ภาพ</a>{% else %}<span class="staff-disabled">ภาพไม่พร้อม</span>{%
+          endif %}<div class="staff-score">{{ row.score }} / 100</div>
+        </div>
+      </li>
+      {% else %}<li class="staff-row">
+        <span class="staff-muted">ยังไม่พบรอบที่ตรงกัน</span>
+      </li>{% endfor %}
+    </ol>
+    <div class="staff-actions">
+      <span class="staff-muted"
+      >หน้า {{ search_page.page }} / {{ search_page.page_count }}</span><nav
+        class="staff-pagination"
+        aria-label="แบ่งหน้า"
+      >
+        {% if search_page.page > 1 %}<a
+          class="staff-link"
+          href="/staff/search?page={{ search_page.page - 1 }}"
+        >ก่อนหน้า</a>{% endif %}{% if search_page.page < search_page.page_count
+        %}<a
+          class="staff-link"
+          href="/staff/search?page={{ search_page.page + 1 }}"
+        >ถัดไป</a>{% endif %}
+      </nav>
+    </div>
+  </div>
+</main>
+{% endblock %}

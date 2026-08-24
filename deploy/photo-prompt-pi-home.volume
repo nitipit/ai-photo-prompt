@@ -1,0 +1,8 @@
+[Unit]
+Description=Photo Prompt Pi OAuth home volume
+
+[Volume]
+VolumeName=photo-prompt-pi-home
+
+[Install]
+WantedBy=default.target

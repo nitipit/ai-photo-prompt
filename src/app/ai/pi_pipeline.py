@@ -66,6 +66,39 @@ _MAX_RPC_JSONL_RECORDS = 4096
 _MAX_RPC_EVIDENCE_RECORDS = 64
 _PROVIDER = "pi"
 
+
+class _ProcessAdmission:
+    """One non-queuing process-wide capacity gate for all Pi pipeline instances."""
+
+    def __init__(self) -> None:
+        self._condition = asyncio.Condition()
+        self._capacity = 1
+        self._active = 0
+
+    def configure(self, capacity: int) -> None:
+        if self._active:
+            if self._capacity != capacity:
+                raise ValueError("Pi admission capacity cannot change while attempts are active")
+            return
+        self._capacity = capacity
+
+    async def try_acquire(self) -> bool:
+        async with self._condition:
+            if self._active >= self._capacity:
+                return False
+            self._active += 1
+            return True
+
+    async def release(self) -> None:
+        async with self._condition:
+            if self._active <= 0:
+                raise RuntimeError("Pi admission release without an active attempt")
+            self._active -= 1
+            self._condition.notify_all()
+
+
+_PROCESS_ADMISSION = _ProcessAdmission()
+
 _FAILURES: dict[str, tuple[str, str]] = {
     "timeout": ("pi_timeout", "การประมวลผล AI ใช้เวลานานเกินไป"),
     "protocol": ("pi_protocol_error", "การตอบสนองจาก AI ไม่ถูกต้อง"),
@@ -98,6 +131,7 @@ class PiAIPipeline:
         max_stdout_bytes: int = 64 * 1024,
         max_stderr_bytes: int = 64 * 1024,
         rpc_cwd: Path | str = ".",
+        max_concurrent_attempts: int = 3,
     ) -> None:
         self._image_argv = self._validate_argv(image_argv, "image_argv")
         self._evaluator_argv = self._validate_argv(evaluator_argv, "evaluator_argv")
@@ -107,7 +141,11 @@ class PiAIPipeline:
         self._max_stdout_bytes = self._validate_bound(max_stdout_bytes, "max_stdout_bytes")
         self._max_stderr_bytes = self._validate_bound(max_stderr_bytes, "max_stderr_bytes")
         self._rpc_cwd = Path(rpc_cwd)
-        self._admission = asyncio.Semaphore(1)
+        if type(max_concurrent_attempts) is not int or not 1 <= max_concurrent_attempts <= 3:
+            raise ValueError("max_concurrent_attempts must be an integer from 1 to 3")
+        self.max_concurrent_attempts = max_concurrent_attempts
+        _PROCESS_ADMISSION.configure(max_concurrent_attempts)
+        self._admission = _PROCESS_ADMISSION
 
     async def run(
         self,
@@ -119,10 +157,12 @@ class PiAIPipeline:
     ) -> AIPipelineResult:
         """Return one admitted result or a safe retryable busy failure."""
 
-        if self._admission.locked():
+        if not await self._admission.try_acquire():
             return self._failure("busy")
-        async with self._admission:
+        try:
             return await self._run_attempt(challenge, prompt, timeout, attempt=attempt)
+        finally:
+            await self._admission.release()
 
     async def _run_attempt(
         self,

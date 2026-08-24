@@ -9,6 +9,7 @@ from .game_round import (
     GenerationStatus,
     LeaderboardProjection,
 )
+from .staff import StaffAuth, StaffSearchPage, StaffSession, search_completed_rounds
 
 __all__ = [
     "AIPipelineRunner",
@@ -18,4 +19,8 @@ __all__ = [
     "GameRoundValidationError",
     "GenerationStatus",
     "LeaderboardProjection",
+    "StaffAuth",
+    "StaffSearchPage",
+    "StaffSession",
+    "search_completed_rounds",
 ]

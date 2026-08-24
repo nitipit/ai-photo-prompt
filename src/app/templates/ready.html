@@ -41,6 +41,11 @@
           <a class="ready-leaderboard-link" href="/leaderboard">
             ดูอันดับ <span aria-hidden="true">↗</span>
           </a>
+          {% if staff_available %}
+          <a class="ready-leaderboard-link" href="/staff/login">ค้นหาผู้เล่น <span
+              aria-hidden="true"
+            >↗</span></a>
+          {% endif %}
         </div>
       </form>
       <p class="ready-hint">
