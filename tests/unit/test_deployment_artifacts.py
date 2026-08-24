@@ -56,6 +56,12 @@ def test_quadlets_parse_through_noninstalling_generator(tmp_path: Path) -> None:
         shutil.copy2(path, source / path.name)
     for path in DEPLOY.glob("*.volume"):
         shutil.copy2(path, source / path.name)
+    dropin = source / "photo-prompt.container.d"
+    dropin.mkdir()
+    (dropin / "10-staff-secret.conf").write_text(
+        "[Container]\nSecret=photo-prompt-staff-pin,type=env,target=PHOTO_PROMPT_STAFF_PIN\n",
+        encoding="utf-8",
+    )
     env = {**os.environ, "QUADLET_UNIT_DIRS": str(source)}
     result = subprocess.run(
         [str(generator), "-dryrun", "-user"],
@@ -67,6 +73,9 @@ def test_quadlets_parse_through_noninstalling_generator(tmp_path: Path) -> None:
     assert result.returncode == 0, result.stderr
     assert "photo-prompt.service" in result.stdout
     assert "photo-prompt-pod.service" in result.stdout
+    assert "Requires=photo-prompt-pod.service photo-prompt-network.service" in result.stdout
+    assert "BindsTo=photo-prompt-pod.service" in result.stdout
+    assert "photo-prompt-staff-pin" in result.stdout
 
 
 def test_deploy_script_exposes_only_status_and_deploy_without_recovery_commands() -> None:
@@ -583,15 +592,20 @@ def test_optional_secret_and_pod_level_network_are_documented() -> None:
     assert "Volume=%h/photo-prompt/app.toml:/etc/photo-prompt/app.toml:ro,z" in container
     assert "Network=photo-prompt.network" in pod
     assert "Secret=photo-prompt-staff-pin,type=env,target=PHOTO_PROMPT_STAFF_PIN" in readme
-    assert "Without this opt-in" in readme
+    assert "photo-prompt.container.d/10-staff-secret.conf" in readme
+    assert "Without this drop-in" in readme
     assert "chmod 0644" in readme
-    assert (
-        "install -m 0644 deploy/*.container deploy/*.network deploy/*.pod deploy/*.volume" in readme
-    )
     assert 'loginctl enable-linger "$USER"' in readme
-    assert "podman network connect photo-prompt.network" in readme
+    assert "systemctl --user enable" not in readme
+    assert "systemctl --user start photo-prompt.service" not in readme
+    assert "systemctl --user start photo-prompt-pod.service" not in readme
+    assert "photo-prompt-pod.service" not in readme.split("## Local build host and release", 1)[0]
+    assert "podman network connect" not in readme
+    assert "Network=<existing-caddy-network>\nNetwork=photo-prompt.network" in readme
     assert "reverse_proxy photo-prompt:8000" in readme
     assert "podman pull --platform linux/amd64" in readme
+    assert "photo-prompt-pi-home:/home/photo-prompt/.pi:rw" in readme
+    assert "auth.json" in readme
 
 
 def _next_health(values: list[Any]) -> Any:
