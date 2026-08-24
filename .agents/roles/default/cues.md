@@ -79,4 +79,5 @@ discoveries, patterns, problems, and next-step context.
 | `leaderboard>ready-access level-top4 persistent-no-timer` | 2026-08-17T03:06:50+07:00 |
 | `audio>arcade-sfx default-on persisted-mute nonblocking` | 2026-08-23T19:35:41+07:00 |
 | `next>generating-denoise hybrid-canvas no-extra-time deferred` | 2026-08-23T19:53:33+07:00 |
-| `print>A5-landscape framed-name-score window-print repeat manual-ready` | 2026-08-23T20:36:08+07:00 |
+| `print>A5-landscape white-5mm image178x100 window-print repeat-ready` | 2026-08-25T01:12:29+07:00 |
+| `leaderboard>scene-scaled thumbnails-contained` | 2026-08-25T01:12:29+07:00 |
