@@ -42,7 +42,7 @@ def test_container_contract_builds_assets_in_builder_and_excludes_runtime_state(
     assert "caddy" not in containerfile.lower()
 
 
-def test_quadlets_parse_through_noninstalling_generator(tmp_path: Path) -> None:
+def test_quadlets_parse_and_generate_expected_boot_links(tmp_path: Path) -> None:
     generator = Path("/usr/libexec/podman/quadlet")
     if not generator.is_file():
         pytest.skip("Podman Quadlet generator is unavailable")
@@ -63,19 +63,51 @@ def test_quadlets_parse_through_noninstalling_generator(tmp_path: Path) -> None:
         encoding="utf-8",
     )
     env = {**os.environ, "QUADLET_UNIT_DIRS": str(source)}
-    result = subprocess.run(
+    dryrun = subprocess.run(
         [str(generator), "-dryrun", "-user"],
         env=env,
         text=True,
         capture_output=True,
         check=False,
     )
-    assert result.returncode == 0, result.stderr
-    assert "photo-prompt.service" in result.stdout
-    assert "photo-prompt-pod.service" in result.stdout
-    assert "Requires=photo-prompt-pod.service photo-prompt-network.service" in result.stdout
-    assert "BindsTo=photo-prompt-pod.service" in result.stdout
-    assert "photo-prompt-staff-pin" in result.stdout
+    assert dryrun.returncode == 0, dryrun.stderr
+    assert "photo-prompt.service" in dryrun.stdout
+    assert "photo-prompt-pod.service" in dryrun.stdout
+    assert "Requires=photo-prompt-pod.service photo-prompt-network.service" in dryrun.stdout
+    assert "BindsTo=photo-prompt-pod.service" in dryrun.stdout
+    assert "photo-prompt-staff-pin" in dryrun.stdout
+
+    def generate(output_root: Path) -> Path:
+        normal = output_root / "normal"
+        early = output_root / "early"
+        late = output_root / "late"
+        normal.mkdir(parents=True)
+        early.mkdir()
+        late.mkdir()
+        generated = subprocess.run(
+            [str(generator), "-user", str(normal), str(early), str(late)],
+            env=env,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        assert generated.returncode == 0, generated.stderr
+        return normal
+
+    before = generate(tmp_path / "before")
+    before_wants = before / "default.target.wants"
+    assert not (before_wants / "photo-prompt.service").exists()
+    assert not (before_wants / "photo-prompt-pod.service").exists()
+    assert (before_wants / "photo-prompt-network.service").is_symlink()
+    assert (before_wants / "photo-prompt-state-volume.service").is_symlink()
+
+    (dropin / "20-boot.conf").write_text("[Install]\nWantedBy=default.target\n", encoding="utf-8")
+    after = generate(tmp_path / "after")
+    after_wants = after / "default.target.wants"
+    app_link = after_wants / "photo-prompt.service"
+    assert app_link.is_symlink()
+    assert app_link.readlink() == Path("../photo-prompt.service")
+    assert not (after_wants / "photo-prompt-pod.service").exists()
 
 
 def test_deploy_script_exposes_only_status_and_deploy_without_recovery_commands() -> None:
@@ -589,13 +621,23 @@ def test_optional_secret_and_pod_level_network_are_documented() -> None:
     readme = (DEPLOY / "README.md").read_text(encoding="utf-8")
     assert "Secret=" not in container
     assert "Network=" not in container
+    assert "[Install]" not in container
+    assert "[Install]" not in pod
     assert "Volume=%h/photo-prompt/app.toml:/etc/photo-prompt/app.toml:ro,z" in container
     assert "Network=photo-prompt.network" in pod
     assert "Secret=photo-prompt-staff-pin,type=env,target=PHOTO_PROMPT_STAFF_PIN" in readme
     assert "photo-prompt.container.d/10-staff-secret.conf" in readme
+    assert "read -r -s -p 'Staff PIN: ' STAFF_PIN" in readme
+    assert '[[ ! "$STAFF_PIN" =~ ^[0-9]{6}$ ]]' in readme
+    assert (
+        'printf %s "$STAFF_PIN" | ssh kiosk-host podman secret create photo-prompt-staff-pin -'
+        in readme
+    )
+    assert "ssh -t kiosk-host podman secret create" not in readme
     assert "Without this drop-in" in readme
     assert "chmod 0644" in readme
-    assert 'loginctl enable-linger "$USER"' in readme
+    assert 'ssh -t kiosk-host sudo loginctl enable-linger "$ROOTLESS_USER"' in readme
+    assert 'loginctl show-user "$ROOTLESS_USER" -p Linger --value' in readme
     assert "systemctl --user enable" not in readme
     assert "systemctl --user start photo-prompt.service" not in readme
     assert "systemctl --user start photo-prompt-pod.service" not in readme
@@ -608,6 +650,11 @@ def test_optional_secret_and_pod_level_network_are_documented() -> None:
     assert "ssh kiosk-host podman run --rm --user 10001:10001" in readme
     assert "photo-prompt-pi-home:/home/photo-prompt/.pi:rw" in readme
     assert "/home/photo-prompt/.pi/agent/auth.json" in readme
+    assert "ssh kiosk-host podman exec photo-prompt /opt/venv/bin/python -c" in readme
+    assert 're.fullmatch(r"[0-9]{6}", os.environ.get("PHOTO_PROMPT_STAFF_PIN", ""))' in readme
+    assert "photo-prompt.container.d/20-boot.conf" in readme
+    assert "[Install]\nWantedBy=default.target" in readme
+    assert "default.target.wants" in readme
 
 
 def _next_health(values: list[Any]) -> Any:

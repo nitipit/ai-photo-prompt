@@ -16,7 +16,11 @@ rootful Caddy container or a different rootless `graphroot` with this setup.
    prerequisites. Do not enable or start the pod or application at this stage:
 
    ```bash
-   ssh kiosk-host 'loginctl enable-linger "$USER" && install -d -m 0755 "$HOME/.config/containers/systemd"'
+   # Run the privileged linger step separately; replace the placeholder user.
+   ROOTLESS_USER=photo-prompt-operator
+   ssh -t kiosk-host sudo loginctl enable-linger "$ROOTLESS_USER"
+   ssh kiosk-host loginctl show-user "$ROOTLESS_USER" -p Linger --value
+   ssh kiosk-host 'install -d -m 0755 "$HOME/.config/containers/systemd"'
    rsync -a \
      deploy/photo-prompt.network \
      deploy/photo-prompt-state.volume \
@@ -48,12 +52,24 @@ rootful Caddy container or a different rootless `graphroot` with this setup.
    `/app/dist`, and `/app/deploy/codex-bridge.ts`. The PIN is never placed in
    this file.
 
-3. Staff search is disabled when the PIN is missing. To opt in manually, create
-   the named Podman secret interactively, then persist the opt-in in an
+3. Staff search is disabled when the PIN is missing. To opt in manually, read
+   and validate the PIN locally without echo, then send exactly six digits
+   without a trailing newline through non-PTY SSH. Persist the opt-in in an
    operator-owned Quadlet source drop-in without editing the tracked base:
 
    ```bash
-   ssh -t kiosk-host podman secret create photo-prompt-staff-pin -
+   read -r -s -p 'Staff PIN: ' STAFF_PIN
+   printf '\n' >&2
+   if [[ ! "$STAFF_PIN" =~ ^[0-9]{6}$ ]]; then
+     unset STAFF_PIN
+     printf 'PIN must be exactly six digits.\n' >&2
+     exit 1
+   fi
+   printf %s "$STAFF_PIN" | ssh kiosk-host podman secret create photo-prompt-staff-pin -
+   status=$?
+   unset STAFF_PIN
+   exit "$status"
+
    ssh kiosk-host 'install -d -m 0755 "$HOME/.config/containers/systemd/photo-prompt.container.d"'
    ssh kiosk-host 'cat > "$HOME/.config/containers/systemd/photo-prompt.container.d/10-staff-secret.conf"' <<'EOF'
    [Container]
@@ -62,7 +78,7 @@ rootful Caddy container or a different rootless `graphroot` with this setup.
    ssh kiosk-host systemctl --user daemon-reload
    ```
 
-   Enter the PIN only on the secret command's stdin. It stays outside TOML,
+   The PIN is entered only on the local no-echo prompt and stays outside TOML,
    tracked files, and logs. Without this drop-in, the gameplay container starts
    normally and staff search remains off.
 
@@ -115,6 +131,29 @@ ssh kiosk-host podman run --rm --user 10001:10001 \
   --volume photo-prompt-pi-home:/home/photo-prompt/.pi:ro \
   --entrypoint /usr/bin/test \
   localhost/photo-prompt:deploy -s /home/photo-prompt/.pi/agent/auth.json
+```
+
+If the staff-secret drop-in is enabled, verify the injected PIN without
+printing it. This is a non-PTY, nonprinting check after app readiness:
+
+```bash
+ssh kiosk-host podman exec photo-prompt /opt/venv/bin/python -c \
+  'import os,re,sys; raise SystemExit(0 if re.fullmatch(r"[0-9]{6}", os.environ.get("PHOTO_PROMPT_STAFF_PIN", "")) else 1)'
+```
+
+After app readiness, Pi authentication, and the optional staff check succeed,
+create the persistent app boot drop-in. The tracked app and pod sources have no
+`[Install]` section; this app-only drop-in creates the default-target link and
+its dependency graph pulls the pod when the app starts:
+
+```bash
+ssh kiosk-host 'install -d -m 0755 "$HOME/.config/containers/systemd/photo-prompt.container.d"'
+ssh kiosk-host 'cat > "$HOME/.config/containers/systemd/photo-prompt.container.d/20-boot.conf"' <<'EOF'
+[Install]
+WantedBy=default.target
+EOF
+ssh kiosk-host systemctl --user daemon-reload
+ssh kiosk-host 'runtime="${XDG_RUNTIME_DIR:-/run/user/$UID}"; wants="$runtime/systemd/generator/default.target.wants"; test -L "$wants/photo-prompt.service"; test "$(readlink "$wants/photo-prompt.service")" = "../photo-prompt.service"; test ! -e "$wants/photo-prompt-pod.service"'
 ```
 
 After both app readiness and the `auth.json` check succeed, add the durable

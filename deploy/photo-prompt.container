@@ -27,6 +27,3 @@ MemoryMax=1536M
 TasksMax=256
 Restart=on-failure
 RestartSec=5s
-
-[Install]
-WantedBy=default.target
