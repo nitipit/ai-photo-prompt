@@ -443,6 +443,9 @@ def test_leaderboard_route_renders_only_completed_current_level_projection(runti
         assert "deterministic-demo" not in leaderboard.text
         assert 'data-image-source="persisted-generated-artifact"' in leaderboard.text
         assert 'data-ranking="competition-rank"' in leaderboard.text
+        assert f'href="/rounds/{round_id}/photo-print"' in leaderboard.text
+        assert 'class="leaderboard-photo-print-link"' in leaderboard.text
+        assert leaderboard.text.count('data-photo-print-link="true"') == 1
 
 
 def test_public_leaderboard_is_direct_persistent_and_level_filtered(runtime_app) -> None:
@@ -457,6 +460,9 @@ def test_public_leaderboard_is_direct_persistent_and_level_filtered(runtime_app)
         assert 'data-leaderboard-level="p1-p3"' in empty.text
         assert 'data-leaderboard-empty="true"' in empty.text
         assert "data-photo-print-url" not in empty.text
+        assert "ไปพิมพ์รูป" not in empty.text
+        assert 'id="ready-fallback-link"' in empty.text
+        assert 'data-ready-fallback="true"' in empty.text
         assert "leaderboard.js" not in empty.text
         assert "data-leaderboard-countdown" not in empty.text
 
@@ -523,6 +529,10 @@ def test_public_leaderboard_is_direct_persistent_and_level_filtered(runtime_app)
         assert leaderboard.text.count('data-entry-rank="2"') == 2
         assert 'data-entry-rank="4"' in leaderboard.text
         assert 'aria-current="page"' in leaderboard.text
+        assert "ไปพิมพ์รูป" not in leaderboard.text
+        assert 'data-photo-print-link="true"' not in leaderboard.text
+        assert 'id="ready-fallback-link"' in leaderboard.text
+        assert 'data-ready-fallback="true"' in leaderboard.text
         assert "leaderboard.js" not in leaderboard.text
         assert "data-leaderboard-countdown" not in leaderboard.text
 
@@ -555,9 +565,76 @@ def test_leaderboard_frontend_contract_is_single_screen_without_list_clipping() 
     assert "overflow" not in list_rule
     assert 'data-leaderboard-deadline="{{ leaderboard_deadline }}"' in leaderboard_source
     assert 'data-current-round="{{ round_id }}"' in leaderboard_source
-    assert "photo-print" not in leaderboard_source
+    assert 'data-photo-print-link="true"' in leaderboard_source
+    assert 'class="leaderboard-photo-print-link"' in leaderboard_source
     assert "public-level-projection" in leaderboard_source
     assert "data-leaderboard-countdown" in leaderboard_source
+
+
+def test_photo_print_layout_preserves_a5_content_and_uses_upper_scene_image() -> None:
+    root = Path(__file__).parents[2] / "src/app/templates"
+    base_source = (root / "_base.html").read_text(encoding="utf-8")
+    photo_print_source = (root / "photo_print.html").read_text(encoding="utf-8")
+    head_source = base_source.split("</head>", maxsplit=1)[0]
+    print_source = base_source[
+        base_source.index("        @media print {") : base_source.index(
+            "        @media (max-height", base_source.index("        @media print {")
+        )
+    ]
+    content_rule = base_source[
+        base_source.index("        .photo-print-sheet-content {") : base_source.index(
+            "        .photo-print-image-frame {",
+            base_source.index("        .photo-print-sheet-content {"),
+        )
+    ]
+    image_rule = base_source[
+        base_source.index("        .photo-print-image-frame {") : base_source.index(
+            "        .photo-print-image-frame::after",
+            base_source.index("        .photo-print-image-frame {"),
+        )
+    ]
+    details_rule = base_source[
+        base_source.index("        .photo-print-details {") : base_source.index(
+            "        .photo-print-instructions {",
+            base_source.index("        .photo-print-details {"),
+        )
+    ]
+
+    assert '<style id="photo-print-page-rules">' in head_source
+    assert "size: A5 landscape" in head_source
+    assert "inset: 5mm;" in base_source
+    assert "grid-template-rows: minmax(0, 1fr) auto;" in content_rule
+    assert "width: 89%;" in image_rule
+    assert "max-width: 178mm;" in image_rule
+    assert "aspect-ratio: 16 / 9;" in image_rule
+    assert "grid-template-columns: minmax(0, 1fr) auto auto;" in details_rule
+    assert "width: 210mm;" in print_source
+    assert "height: 148mm;" in print_source
+    assert "object-fit: contain;" in base_source
+    for content in (
+        "PHOTO <strong>PROMPT</strong>",
+        "ภาพที่ระลึก",
+        "ภาพจากไอเดียของ",
+        "{{ display_name }}",
+        "คะแนนรอบนี้",
+        'data-score-source="stored-round-score"',
+        "เห็น · คิด · สั่ง · สร้าง",
+    ):
+        assert content in photo_print_source
+
+
+def test_scene_compact_scale_is_shared_and_actual_viewport_based() -> None:
+    base_source = (Path(__file__).parents[2] / "src/app/templates/_base.html").read_text(
+        encoding="utf-8"
+    )
+    head_source = base_source.split("</head>", maxsplit=1)[0]
+
+    assert "font-size: clamp(10px, min(1.6666667vw, 2.962963vh), 16px);" in head_source
+    assert "font-size: 16px;" in head_source
+    assert "min-width: 0;" in base_source
+    assert "overflow-wrap: anywhere;" in base_source
+    assert ".leaderboard-photo-print-link" in base_source
+    assert "background: var(--coral);" in base_source
 
 
 def test_result_and_leaderboard_routes_map_missing_and_stale_rounds(runtime_app) -> None:

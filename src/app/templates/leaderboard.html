@@ -116,14 +116,6 @@
     >
       {% if view_mode == "public" %}
       <p>เลือกช่วงชั้นด้านบนเพื่อดูอันดับอื่น ๆ</p>
-      {% else %}
-      <p>
-        ดูภาพที่ระลึกต่อได้ใน
-        <strong class="leaderboard-countdown" data-leaderboard-countdown
-        >—</strong>
-        วินาที
-      </p>
-      {% endif %}
       <a
         id="ready-fallback-link"
         class="leaderboard-ready-link"
@@ -132,6 +124,31 @@
       >
         กลับหน้าพร้อมเล่น <span aria-hidden="true">→</span>
       </a>
+      {% else %}
+      <p>
+        ดูภาพที่ระลึกต่อได้ใน
+        <strong class="leaderboard-countdown" data-leaderboard-countdown
+        >—</strong>
+        วินาที
+      </p>
+      <div class="leaderboard-navigation">
+        <a
+          class="leaderboard-photo-print-link"
+          href="/rounds/{{ round_id }}/photo-print"
+          data-photo-print-link="true"
+        >
+          ไปพิมพ์รูป <span aria-hidden="true">→</span>
+        </a>
+        <a
+          id="ready-fallback-link"
+          class="leaderboard-ready-link"
+          href="/"
+          data-ready-fallback="true"
+        >
+          กลับหน้าพร้อมเล่น <span aria-hidden="true">→</span>
+        </a>
+      </div>
+      {% endif %}
     </div>
   </div>
 </main>
