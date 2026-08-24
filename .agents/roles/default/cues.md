@@ -81,3 +81,6 @@ discoveries, patterns, problems, and next-step context.
 | `next>generating-denoise hybrid-canvas no-extra-time deferred` | 2026-08-23T19:53:33+07:00 |
 | `print>A5-landscape white-5mm image178x100 window-print repeat-ready` | 2026-08-25T01:12:29+07:00 |
 | `leaderboard>scene-scaled thumbnails-contained` | 2026-08-25T01:12:29+07:00 |
+| `release>0870b0f pushed-deployed healthy-internal-smoke` | 2026-08-25T02:30:04+07:00 |
+| `production>waiting-pi-login then-caddy-restart-ai-smoke` | 2026-08-25T02:30:04+07:00 |
+| `recovery>manual-ai-assisted explicit-remote-approval` | 2026-08-25T02:30:04+07:00 |
