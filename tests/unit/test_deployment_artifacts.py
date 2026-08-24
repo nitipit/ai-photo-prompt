@@ -81,10 +81,12 @@ def test_deploy_script_exposes_only_status_and_deploy_without_recovery_commands(
     assert "deploy" in result.stdout
     assert "setup-host" not in result.stdout
     assert "pi-login" not in result.stdout
+    assert "remote-root" not in result.stdout
     script = (DEPLOY / "deploy.py").read_text(encoding="utf-8")
     assert "sha256sum" in script
     assert "DEPLOY_TAG" in script
     assert "REMOTE_IMAGE" in script
+    assert '"--format", "oci-archive"' in script
     assert "photo-prompt-deploy.tar.gz" not in script
     assert "tarfile" not in script
     assert '"podman", "volume"' not in script
@@ -112,6 +114,36 @@ def test_remote_uses_one_shlex_command_for_nested_shell_arguments(
     assert "$(touch nope)" in calls[0][2]
 
 
+def test_run_command_preserves_bounded_failure_detail(
+    deploy_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    stderr = "permission denied\n" + ("x" * 3000)
+    completed = subprocess.CompletedProcess(
+        args=("podman", "load"), stdout="", stderr=stderr, returncode=17
+    )
+    monkeypatch.setattr(deploy_module.subprocess, "run", lambda *_args, **_kwargs: completed)
+
+    with pytest.raises(deploy_module.DeployError) as raised:
+        deploy_module.run_command(("podman", "load"))
+
+    message = str(raised.value)
+    assert "returncode=17" in message
+    assert "permission denied" in message
+    assert "[truncated]" in message
+    assert len(message) < deploy_module.ERROR_TEXT_LIMIT + 200
+
+
+def test_run_command_preserves_process_start_failure_detail(
+    deploy_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def fail_to_start(*_args: Any, **_kwargs: Any) -> Any:
+        raise OSError("executable unavailable")
+
+    monkeypatch.setattr(deploy_module.subprocess, "run", fail_to_start)
+    with pytest.raises(deploy_module.DeployError, match="could not start.*executable unavailable"):
+        deploy_module.run_command(("podman", "load"))
+
+
 def test_home_relative_root_is_resolved_on_remote_host(
     deploy_module: ModuleType, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -122,12 +154,9 @@ def test_home_relative_root_is_resolved_on_remote_host(
         return deploy_module.CommandResult("/home/operator/photo-prompt")
 
     monkeypatch.setattr(deploy_module, "remote", fake_remote)
-    assert (
-        deploy_module._resolve_remote_root("kiosk-host", "~/photo-prompt")
-        == "/home/operator/photo-prompt"
-    )
+    assert deploy_module._resolve_remote_root("kiosk-host") == "/home/operator/photo-prompt"
     assert calls[0][:2] == ("sh", "-c")
-    assert "root='~/photo-prompt'" in calls[0][2]
+    assert "root=$HOME/photo-prompt" in calls[0][2]
 
 
 def test_remote_health_executes_container_local_projection(
@@ -202,12 +231,14 @@ def test_deploy_orders_config_gate_idle_gate_switch_restart_and_cleanup(
     def fake_run(args: tuple[str, ...], *, check: bool = True, **_: Any) -> Any:
         events.append(("local", args))
         if args[:2] == ("podman", "save"):
-            Path(args[3]).write_bytes(image_bytes)
+            Path(args[args.index("--output") + 1]).write_bytes(image_bytes)
         return deploy_module.CommandResult()
 
     def fake_remote(host: str, args: tuple[str, ...], *, check: bool = True) -> Any:
         nonlocal health_calls
         events.append(("remote", args))
+        if args[:2] == ("sh", "-c"):
+            return deploy_module.CommandResult("/home/operator/photo-prompt")
         if args[:2] == ("sha256sum", deploy_module.REMOTE_IMAGE):
             return deploy_module.CommandResult(f"{image_sha}  {deploy_module.REMOTE_IMAGE}\n")
         if args == ("podman", "container", "exists", "photo-prompt"):
@@ -221,8 +252,12 @@ def test_deploy_orders_config_gate_idle_gate_switch_restart_and_cleanup(
 
     monkeypatch.setattr(deploy_module, "run_command", fake_run)
     monkeypatch.setattr(deploy_module, "remote", fake_remote)
-    deploy_module.deploy(host="kiosk-host", remote_root="/srv/photo-prompt")
+    deploy_module.deploy(host="kiosk-host")
 
+    save_command = next(
+        args for kind, args in events if kind == "local" and args[:2] == ("podman", "save")
+    )
+    assert save_command[2:4] == ("--format", "oci-archive")
     remote_commands = [args for kind, args in events if kind == "remote"]
     config_index = next(
         index for index, args in enumerate(remote_commands) if args[:2] == ("podman", "run")
@@ -240,7 +275,7 @@ def test_deploy_orders_config_gate_idle_gate_switch_restart_and_cleanup(
     assert config_index < idle_index < tag_index < restart_index < cleanup_index
     config_command = remote_commands[config_index]
     assert "localhost/photo-prompt:abc123" in config_command
-    assert "/srv/photo-prompt/app.toml:/etc/photo-prompt/app.toml:ro" in config_command
+    assert "/home/operator/photo-prompt/app.toml:/etc/photo-prompt/app.toml:ro,z" in config_command
     assert "--entrypoint" in config_command
     assert "PYTHONPATH=/app/src" in config_command
     assert "--pull=never" in config_command
@@ -260,12 +295,14 @@ def test_initial_deploy_skips_missing_container_health_and_restarts(
     def fake_run(args: tuple[str, ...], **_: Any) -> Any:
         events.append(args)
         if args[:2] == ("podman", "save"):
-            Path(args[3]).write_bytes(image_bytes)
+            Path(args[args.index("--output") + 1]).write_bytes(image_bytes)
         return deploy_module.CommandResult()
 
     def fake_remote(_host: str, args: tuple[str, ...], **_: Any) -> Any:
         nonlocal health_calls
         events.append(args)
+        if args[:2] == ("sh", "-c"):
+            return deploy_module.CommandResult("/home/operator/photo-prompt")
         if args[:2] == ("sha256sum", deploy_module.REMOTE_IMAGE):
             return deploy_module.CommandResult(f"{image_sha}  {deploy_module.REMOTE_IMAGE}\n")
         if args == ("podman", "container", "exists", "photo-prompt"):
@@ -277,7 +314,7 @@ def test_initial_deploy_skips_missing_container_health_and_restarts(
 
     monkeypatch.setattr(deploy_module, "run_command", fake_run)
     monkeypatch.setattr(deploy_module, "remote", fake_remote)
-    deploy_module.deploy(host="kiosk-host", remote_root="/srv/photo-prompt")
+    deploy_module.deploy(host="kiosk-host")
 
     assert ("podman", "container", "exists", "photo-prompt") in events
     assert ("podman", "tag", "localhost/photo-prompt:abc123", deploy_module.DEPLOY_TAG) in events
@@ -296,11 +333,13 @@ def test_existing_unhealthy_container_aborts_before_switch(
     def fake_run(args: tuple[str, ...], **_: Any) -> Any:
         events.append(args)
         if args[:2] == ("podman", "save"):
-            Path(args[3]).write_bytes(image_bytes)
+            Path(args[args.index("--output") + 1]).write_bytes(image_bytes)
         return deploy_module.CommandResult()
 
     def fake_remote(_host: str, args: tuple[str, ...], **_: Any) -> Any:
         events.append(args)
+        if args[:2] == ("sh", "-c"):
+            return deploy_module.CommandResult("/home/operator/photo-prompt")
         if args[:2] == ("sha256sum", deploy_module.REMOTE_IMAGE):
             return deploy_module.CommandResult(f"{image_sha}  {deploy_module.REMOTE_IMAGE}\n")
         if args == ("podman", "container", "exists", "photo-prompt"):
@@ -312,7 +351,7 @@ def test_existing_unhealthy_container_aborts_before_switch(
     monkeypatch.setattr(deploy_module, "run_command", fake_run)
     monkeypatch.setattr(deploy_module, "remote", fake_remote)
     with pytest.raises(deploy_module.RemoteHealthUnavailable):
-        deploy_module.deploy(host="kiosk-host", remote_root="/srv/photo-prompt")
+        deploy_module.deploy(host="kiosk-host")
 
     assert not any(args[:2] == ("podman", "tag") for args in events)
     assert not any(args[:2] == ("systemctl", "--user") for args in events)
@@ -330,11 +369,13 @@ def test_existing_not_ready_container_aborts_before_switch(
     def fake_run(args: tuple[str, ...], **_: Any) -> Any:
         events.append(args)
         if args[:2] == ("podman", "save"):
-            Path(args[3]).write_bytes(image_bytes)
+            Path(args[args.index("--output") + 1]).write_bytes(image_bytes)
         return deploy_module.CommandResult()
 
     def fake_remote(_host: str, args: tuple[str, ...], **_: Any) -> Any:
         events.append(args)
+        if args[:2] == ("sh", "-c"):
+            return deploy_module.CommandResult("/home/operator/photo-prompt")
         if args[:2] == ("sha256sum", deploy_module.REMOTE_IMAGE):
             return deploy_module.CommandResult(f"{image_sha}  {deploy_module.REMOTE_IMAGE}\n")
         if args == ("podman", "container", "exists", "photo-prompt"):
@@ -346,7 +387,7 @@ def test_existing_not_ready_container_aborts_before_switch(
     monkeypatch.setattr(deploy_module, "run_command", fake_run)
     monkeypatch.setattr(deploy_module, "remote", fake_remote)
     with pytest.raises(deploy_module.DeployError, match="service is not ready"):
-        deploy_module.deploy(host="kiosk-host", remote_root="/srv/photo-prompt")
+        deploy_module.deploy(host="kiosk-host")
 
     exec_index = next(
         index for index, args in enumerate(events) if args[:3] == ("podman", "exec", "photo-prompt")
@@ -355,6 +396,73 @@ def test_existing_not_ready_container_aborts_before_switch(
     assert exec_index < cleanup_index
     assert not any(args[:2] == ("podman", "tag") for args in events)
     assert not any(args[:2] == ("systemctl", "--user") for args in events)
+
+
+def test_cleanup_failure_fails_otherwise_successful_deploy(
+    deploy_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    image_bytes = b"oci image"
+    monkeypatch.setattr(deploy_module, "preflight", lambda: "abc123")
+    monkeypatch.setattr(deploy_module, "_remote_sha256", lambda *_args: None)
+    monkeypatch.setattr(
+        deploy_module, "_resolve_remote_root", lambda _host: "/home/operator/photo-prompt"
+    )
+    monkeypatch.setattr(deploy_module, "_remote_validate_active_config", lambda *_args: None)
+    monkeypatch.setattr(deploy_module, "_remote_container_exists", lambda _host: False)
+    monkeypatch.setattr(deploy_module, "_wait_until_ready", lambda _host: None)
+
+    def fake_run(args: tuple[str, ...], **_: Any) -> Any:
+        if args[:2] == ("podman", "save"):
+            Path(args[args.index("--output") + 1]).write_bytes(image_bytes)
+        return deploy_module.CommandResult()
+
+    def fake_remote(_host: str, args: tuple[str, ...], **_: Any) -> Any:
+        if args == ("rm", "-f", deploy_module.REMOTE_IMAGE):
+            return deploy_module.CommandResult(stderr="cleanup denied", returncode=9)
+        return deploy_module.CommandResult()
+
+    monkeypatch.setattr(deploy_module, "run_command", fake_run)
+    monkeypatch.setattr(deploy_module, "remote", fake_remote)
+    with pytest.raises(deploy_module.DeployError, match="returncode=9.*cleanup denied"):
+        deploy_module.deploy(host="kiosk-host")
+
+
+def test_primary_failure_stays_primary_and_surfaces_cleanup_failure(
+    deploy_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    image_bytes = b"oci image"
+    monkeypatch.setattr(deploy_module, "preflight", lambda: "abc123")
+    monkeypatch.setattr(deploy_module, "_remote_sha256", lambda *_args: None)
+    monkeypatch.setattr(
+        deploy_module, "_resolve_remote_root", lambda _host: "/home/operator/photo-prompt"
+    )
+    monkeypatch.setattr(
+        deploy_module,
+        "_remote_validate_active_config",
+        lambda *_args: (_ for _ in ()).throw(
+            deploy_module.DeployError("primary validation failed")
+        ),
+    )
+
+    def fake_run(args: tuple[str, ...], **_: Any) -> Any:
+        if args[:2] == ("podman", "save"):
+            Path(args[args.index("--output") + 1]).write_bytes(image_bytes)
+        return deploy_module.CommandResult()
+
+    def fake_remote(_host: str, args: tuple[str, ...], **_: Any) -> Any:
+        if args == ("rm", "-f", deploy_module.REMOTE_IMAGE):
+            raise deploy_module.DeployError("cleanup transport failed")
+        return deploy_module.CommandResult()
+
+    monkeypatch.setattr(deploy_module, "run_command", fake_run)
+    monkeypatch.setattr(deploy_module, "remote", fake_remote)
+    with pytest.raises(deploy_module.DeployError, match="primary validation failed") as raised:
+        deploy_module.deploy(host="kiosk-host")
+
+    assert any(
+        "secondary cleanup failure: cleanup transport failed" in note
+        for note in raised.value.__notes__
+    )
 
 
 def test_invalid_active_config_aborts_before_idle_gate_or_switch(
@@ -368,11 +476,13 @@ def test_invalid_active_config_aborts_before_idle_gate_or_switch(
     def fake_run(args: tuple[str, ...], **_: Any) -> Any:
         events.append(args)
         if args[:2] == ("podman", "save"):
-            Path(args[3]).write_bytes(image_bytes)
+            Path(args[args.index("--output") + 1]).write_bytes(image_bytes)
         return deploy_module.CommandResult()
 
     def fake_remote(_host: str, args: tuple[str, ...], **_: Any) -> Any:
         events.append(args)
+        if args[:2] == ("sh", "-c"):
+            return deploy_module.CommandResult("/home/operator/photo-prompt")
         if args[:2] == ("sha256sum", deploy_module.REMOTE_IMAGE):
             return deploy_module.CommandResult(f"{image_sha}  {deploy_module.REMOTE_IMAGE}\n")
         if args[:2] == ("podman", "run"):
@@ -382,7 +492,7 @@ def test_invalid_active_config_aborts_before_idle_gate_or_switch(
     monkeypatch.setattr(deploy_module, "run_command", fake_run)
     monkeypatch.setattr(deploy_module, "remote", fake_remote)
     with pytest.raises(deploy_module.DeployError, match="active configuration"):
-        deploy_module.deploy(host="kiosk-host", remote_root="/srv/photo-prompt")
+        deploy_module.deploy(host="kiosk-host")
 
     assert not any(args[:2] == ("systemctl", "--user") for args in events)
     assert not any(args[:2] == ("podman", "tag") for args in events)
@@ -400,11 +510,13 @@ def test_active_generation_aborts_before_switch(
     def fake_run(args: tuple[str, ...], **_: Any) -> Any:
         events.append(args)
         if args[:2] == ("podman", "save"):
-            Path(args[3]).write_bytes(image_bytes)
+            Path(args[args.index("--output") + 1]).write_bytes(image_bytes)
         return deploy_module.CommandResult()
 
     def fake_remote(_host: str, args: tuple[str, ...], **_: Any) -> Any:
         events.append(args)
+        if args[:2] == ("sh", "-c"):
+            return deploy_module.CommandResult("/home/operator/photo-prompt")
         if args[:2] == ("sha256sum", deploy_module.REMOTE_IMAGE):
             return deploy_module.CommandResult(f"{image_sha}  {deploy_module.REMOTE_IMAGE}\n")
         if args[:3] == ("podman", "exec", "photo-prompt"):
@@ -414,7 +526,7 @@ def test_active_generation_aborts_before_switch(
     monkeypatch.setattr(deploy_module, "run_command", fake_run)
     monkeypatch.setattr(deploy_module, "remote", fake_remote)
     with pytest.raises(deploy_module.DeployError, match="generation is active"):
-        deploy_module.deploy(host="kiosk-host", remote_root="/srv/photo-prompt")
+        deploy_module.deploy(host="kiosk-host")
 
     assert not any(args[:2] == ("podman", "tag") for args in events)
     assert not any(args[:2] == ("systemctl", "--user") for args in events)
@@ -433,12 +545,14 @@ def test_post_switch_health_failure_is_clear_and_does_not_recover(
     def fake_run(args: tuple[str, ...], **_: Any) -> Any:
         events.append(args)
         if args[:2] == ("podman", "save"):
-            Path(args[3]).write_bytes(image_bytes)
+            Path(args[args.index("--output") + 1]).write_bytes(image_bytes)
         return deploy_module.CommandResult()
 
     def fake_remote(_host: str, args: tuple[str, ...], **_: Any) -> Any:
         nonlocal health_calls
         events.append(args)
+        if args[:2] == ("sh", "-c"):
+            return deploy_module.CommandResult("/home/operator/photo-prompt")
         if args[:2] == ("sha256sum", deploy_module.REMOTE_IMAGE):
             return deploy_module.CommandResult(f"{image_sha}  {deploy_module.REMOTE_IMAGE}\n")
         if args[:3] == ("podman", "exec", "photo-prompt"):
@@ -452,7 +566,7 @@ def test_post_switch_health_failure_is_clear_and_does_not_recover(
     monkeypatch.setattr(deploy_module, "remote", fake_remote)
 
     with pytest.raises(deploy_module.DeployError, match="health deadline"):
-        deploy_module.deploy(host="kiosk-host", remote_root="/srv/photo-prompt")
+        deploy_module.deploy(host="kiosk-host")
 
     assert any(args[:2] == ("podman", "tag") for args in events)
     assert any(args[:2] == ("systemctl", "--user") for args in events)
@@ -466,9 +580,18 @@ def test_optional_secret_and_pod_level_network_are_documented() -> None:
     readme = (DEPLOY / "README.md").read_text(encoding="utf-8")
     assert "Secret=" not in container
     assert "Network=" not in container
+    assert "Volume=%h/photo-prompt/app.toml:/etc/photo-prompt/app.toml:ro,z" in container
     assert "Network=photo-prompt.network" in pod
     assert "Secret=photo-prompt-staff-pin,type=env,target=PHOTO_PROMPT_STAFF_PIN" in readme
     assert "Without this opt-in" in readme
+    assert "chmod 0644" in readme
+    assert (
+        "install -m 0644 deploy/*.container deploy/*.network deploy/*.pod deploy/*.volume" in readme
+    )
+    assert 'loginctl enable-linger "$USER"' in readme
+    assert "podman network connect photo-prompt.network" in readme
+    assert "reverse_proxy photo-prompt:8000" in readme
+    assert "podman pull --platform linux/amd64" in readme
 
 
 def _next_health(values: list[Any]) -> Any:

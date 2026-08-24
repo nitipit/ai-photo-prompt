@@ -23,8 +23,8 @@ from cyclopts import App
 ROOT = Path(__file__).resolve().parents[1]
 REMOTE_IMAGE = "/tmp/photo-prompt-image.tar"
 SERVICE = "photo-prompt.service"
-DEPLOY_ROOT = "~/photo-prompt"
 DEPLOY_TAG = "localhost/photo-prompt:deploy"
+ERROR_TEXT_LIMIT = 2048
 HEALTH_TIMEOUT_SECONDS = 60.0
 HEALTH_POLL_SECONDS = 2.0
 
@@ -52,19 +52,41 @@ class CommandResult:
     returncode: int = 0
 
 
+def _bounded_text(value: str) -> str:
+    value = value.strip()
+    if len(value) <= ERROR_TEXT_LIMIT:
+        return value
+    return value[:ERROR_TEXT_LIMIT] + "...[truncated]"
+
+
+def _command_failure_message(args: Sequence[str], result: CommandResult) -> str:
+    message = f"command failed: {args[0]} (returncode={result.returncode})"
+    stderr = _bounded_text(result.stderr)
+    if stderr:
+        message += f"; stderr={stderr}"
+    return message
+
+
 def run_command(args: Sequence[str], *, cwd: Path = ROOT, check: bool = True) -> CommandResult:
     """Run one subprocess; tests replace this boundary and perform no remote work."""
 
-    completed = subprocess.run(
-        list(args),
-        cwd=cwd,
-        check=False,
-        text=True,
-        capture_output=True,
-    )
+    try:
+        completed = subprocess.run(
+            list(args),
+            cwd=cwd,
+            check=False,
+            text=True,
+            capture_output=True,
+        )
+    except OSError as error:
+        detail = _bounded_text(str(error))
+        message = f"command could not start: {args[0]}"
+        if detail:
+            message += f"; error={detail}"
+        raise DeployError(message) from error
     result = CommandResult(completed.stdout, completed.stderr, completed.returncode)
     if check and result.returncode != 0:
-        raise DeployError(f"command failed: {args[0]}")
+        raise DeployError(_command_failure_message(args, result))
     return result
 
 
@@ -96,23 +118,10 @@ def _sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def _resolve_remote_root(host: str, remote_root: str) -> str:
-    """Resolve the operator's home-relative root on the remote host."""
+def _resolve_remote_root(host: str) -> str:
+    """Resolve the fixed operator path used by the Quadlet mount."""
 
-    if remote_root.startswith("/"):
-        return remote_root.rstrip("/") or "/"
-    script = "\n".join(
-        (
-            f"root={shlex.quote(remote_root)}",
-            'case "$root" in',
-            '  "~") root=$HOME ;;',
-            '  "~/"*) root=$HOME/${root#\\~} ;;',
-            "  /*) ;;",
-            "  *) printf 'deployment root must be absolute or home-relative\\n' >&2; exit 2 ;;",
-            "esac",
-            "printf '%s' \"$root\"",
-        )
-    )
+    script = "root=$HOME/photo-prompt\nprintf '%s' \"$root\""
     result = remote(host, ("sh", "-c", script))
     resolved = result.stdout.strip()
     if not resolved or not resolved.startswith("/") or "\n" in result.stdout:
@@ -128,27 +137,26 @@ def _remote_sha256(host: str, path: str, expected: str) -> None:
 
 
 def _remote_container_exists(host: str) -> bool:
-    result = remote(host, ("podman", "container", "exists", "photo-prompt"), check=False)
+    command = ("podman", "container", "exists", "photo-prompt")
+    result = remote(host, command, check=False)
     if result.returncode == 0:
         return True
     if result.returncode == 1:
         return False
-    raise DeployError("could not determine whether the remote app container exists")
+    raise DeployError(_command_failure_message(command, result))
 
 
 def _remote_health(host: str) -> dict[str, object]:
     """Read only the non-sensitive health projection inside the app container."""
 
+    command = ("podman", "exec", "photo-prompt", "/opt/venv/bin/python", "-c", _HEALTH_SCRIPT)
     try:
-        result = remote(
-            host,
-            ("podman", "exec", "photo-prompt", "/opt/venv/bin/python", "-c", _HEALTH_SCRIPT),
-            check=False,
-        )
+        result = remote(host, command, check=False)
     except DeployError as error:
-        raise RemoteHealthUnavailable("remote health command was unavailable") from error
+        detail = _bounded_text(str(error))
+        raise RemoteHealthUnavailable(f"remote health command was unavailable: {detail}") from error
     if result.returncode != 0:
-        raise RemoteHealthUnavailable("remote health command was unavailable")
+        raise RemoteHealthUnavailable(_command_failure_message(command, result))
     try:
         value = json.loads(result.stdout)
     except json.JSONDecodeError as error:
@@ -193,8 +201,8 @@ def _wait_until_ready(host: str) -> None:
     raise failure
 
 
-def _remote_validate_active_config(host: str, remote_root: str, image_tag: str) -> None:
-    config_path = f"{remote_root}/app.toml"
+def _remote_validate_active_config(host: str, resolved_root: str, image_tag: str) -> None:
+    config_path = f"{resolved_root}/app.toml"
     remote(
         host,
         (
@@ -209,7 +217,7 @@ def _remote_validate_active_config(host: str, remote_root: str, image_tag: str) 
             "--env",
             "PYTHONPATH=/app/src",
             "--volume",
-            f"{config_path}:/etc/photo-prompt/app.toml:ro",
+            f"{config_path}:/etc/photo-prompt/app.toml:ro,z",
             image_tag,
             "-c",
             _CONFIG_CHECK_SCRIPT,
@@ -218,13 +226,13 @@ def _remote_validate_active_config(host: str, remote_root: str, image_tag: str) 
 
 
 def _cleanup_remote_image(host: str) -> None:
-    try:
-        remote(host, ("rm", "-f", REMOTE_IMAGE), check=False)
-    except Exception:
-        pass
+    command = ("rm", "-f", REMOTE_IMAGE)
+    result = remote(host, command, check=False)
+    if result.returncode != 0:
+        raise DeployError(_command_failure_message(command, result))
 
 
-def deploy(*, host: str, remote_root: str = DEPLOY_ROOT) -> None:
+def deploy(*, host: str) -> None:
     """Build, transfer, validate, switch, and health-check one local image."""
 
     commit = preflight()
@@ -234,23 +242,36 @@ def deploy(*, host: str, remote_root: str = DEPLOY_ROOT) -> None:
 
     with tempfile.TemporaryDirectory(prefix="photo-prompt-deploy-") as temporary:
         image = Path(temporary) / "photo-prompt-image.tar"
-        run_command(("podman", "save", "--output", str(image), image_tag))
+        run_command(
+            ("podman", "save", "--format", "oci-archive", "--output", str(image), image_tag)
+        )
         image_sha = _sha256(image)
         transfer_attempted = True
+        primary_error: Exception | None = None
         try:
             run_command(("scp", str(image), f"{host}:{REMOTE_IMAGE}"))
             _remote_sha256(host, REMOTE_IMAGE, image_sha)
             remote(host, ("podman", "load", "--input", REMOTE_IMAGE))
-            resolved_root = _resolve_remote_root(host, remote_root)
+            resolved_root = _resolve_remote_root(host)
             _remote_validate_active_config(host, resolved_root, image_tag)
             if _remote_container_exists(host):
                 _require_idle(_remote_health(host))
             remote(host, ("podman", "tag", image_tag, DEPLOY_TAG))
             remote(host, ("systemctl", "--user", "restart", SERVICE))
             _wait_until_ready(host)
+        except Exception as error:
+            primary_error = error
+            raise
         finally:
             if transfer_attempted:
-                _cleanup_remote_image(host)
+                try:
+                    _cleanup_remote_image(host)
+                except Exception as cleanup_error:
+                    if primary_error is None:
+                        raise
+                    primary_error.add_note(
+                        f"secondary cleanup failure: {_bounded_text(str(cleanup_error))}"
+                    )
 
 
 app = App(name="photo-prompt-deploy", help="Photo Prompt image deployment")

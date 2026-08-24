@@ -10,7 +10,7 @@ Pod=photo-prompt.pod
 User=10001:10001
 WorkingDir=/app
 Environment=PHOTO_PROMPT_CONFIG=/etc/photo-prompt/app.toml
-Volume=%h/photo-prompt/app.toml:/etc/photo-prompt/app.toml:ro
+Volume=%h/photo-prompt/app.toml:/etc/photo-prompt/app.toml:ro,z
 Volume=photo-prompt-state:/var/lib/photo-prompt/state:rw
 Volume=photo-prompt-generated:/var/lib/photo-prompt/generated:rw
 Volume=photo-prompt-pi-home:/home/photo-prompt/.pi:rw
