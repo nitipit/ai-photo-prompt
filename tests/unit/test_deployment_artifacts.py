@@ -8,6 +8,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import textwrap
 from pathlib import Path
 from types import ModuleType
 from typing import Any
@@ -627,17 +628,17 @@ def test_optional_secret_and_pod_level_network_are_documented() -> None:
     assert "Network=photo-prompt.network" in pod
     assert "Secret=photo-prompt-staff-pin,type=env,target=PHOTO_PROMPT_STAFF_PIN" in readme
     assert "photo-prompt.container.d/10-staff-secret.conf" in readme
-    assert "(\n     trap 'unset STAFF_PIN' EXIT" in readme
+    assert "if (\n     trap 'unset STAFF_PIN' EXIT" in readme
     assert "read -r -s -p 'Staff PIN: ' STAFF_PIN" in readme
-    assert '[[ ! "$STAFF_PIN" =~ ^[0-9]{6}$ ]]' in readme
+    assert '[[ "$STAFF_PIN" =~ ^[0-9]{6}$ ]]' in readme
     assert (
         'printf %s "$STAFF_PIN" | ssh kiosk-host podman secret create photo-prompt-staff-pin -'
         in readme
     )
     assert "ssh -t kiosk-host podman secret create" not in readme
     assert "ssh kiosk-host 'install -d -m 0755" in readme
-    assert "photo-prompt.container.d\"' &&" in readme
-    assert "<<'EOF' &&" in readme
+    assert 'printf "%s\\n" "[Container]" "Secret=photo-prompt-staff-pin' in readme
+    assert "<<'EOF'" not in readme.split("4. On kiosk clients", 1)[0]
     assert 'exit "$status"' not in readme
     assert "Without this drop-in" in readme
     assert "chmod 0644" in readme
@@ -663,6 +664,84 @@ def test_optional_secret_and_pod_level_network_are_documented() -> None:
     assert "photo-prompt.container.d/20-boot.conf" in readme
     assert "[Install]\nWantedBy=default.target" in readme
     assert "default.target.wants" in readme
+
+
+def test_staff_secret_runbook_block_is_valid_and_preserves_secret_bytes(
+    tmp_path: Path,
+) -> None:
+    readme = (DEPLOY / "README.md").read_text(encoding="utf-8")
+    staff_section = readme.split("3. Staff search", 1)[1]
+    fenced_block = staff_section.split("```bash\n", 1)[1].split("\n   ```", 1)[0]
+    rendered_block = textwrap.dedent(fenced_block)
+    assert "exit " not in rendered_block
+
+    script = tmp_path / "staff-secret.sh"
+    script.write_text(rendered_block, encoding="utf-8")
+    syntax = subprocess.run(
+        ["bash", "-n", str(script)],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert syntax.returncode == 0, syntax.stderr
+
+    fake_ssh = tmp_path / "ssh"
+    fake_ssh.write_text(
+        """#!/bin/sh
+set -eu
+case "$*" in
+  *"podman secret create photo-prompt-staff-pin -"*)
+    cat > "$FAKE_SECRET"
+    printf '%s\\n' secret >> "$FAKE_LOG"
+    ;;
+  *"install -d -m 0755"*)
+    printf '%s\\n' install >> "$FAKE_LOG"
+    ;;
+  *"cat > "*)
+    cat > "$FAKE_DROPIN"
+    printf '%s\\n' dropin >> "$FAKE_LOG"
+    ;;
+  *"systemctl --user daemon-reload"*)
+    printf '%s\\n' reload >> "$FAKE_LOG"
+    ;;
+  *)
+    printf 'unexpected fake ssh command\\n' >&2
+    exit 2
+    ;;
+esac
+""",
+        encoding="utf-8",
+    )
+    fake_ssh.chmod(0o755)
+    secret = tmp_path / "secret"
+    dropin = tmp_path / "dropin"
+    log = tmp_path / "ssh-order"
+    env = {
+        **os.environ,
+        "PATH": f"{tmp_path}{os.pathsep}{os.environ['PATH']}",
+        "FAKE_SECRET": str(secret),
+        "FAKE_DROPIN": str(dropin),
+        "FAKE_LOG": str(log),
+    }
+    execution = subprocess.run(
+        ["bash", str(script)],
+        input="123456\n",
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert execution.returncode == 0, execution.stderr
+    assert secret.read_bytes() == b"123456"
+    assert dropin.read_bytes() == (
+        b"[Container]\nSecret=photo-prompt-staff-pin,type=env,target=PHOTO_PROMPT_STAFF_PIN\n"
+    )
+    assert log.read_text(encoding="utf-8").splitlines() == [
+        "secret",
+        "install",
+        "dropin",
+        "reload",
+    ]
 
 
 def _next_health(values: list[Any]) -> Any:

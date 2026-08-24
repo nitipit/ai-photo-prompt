@@ -58,22 +58,25 @@ rootful Caddy container or a different rootless `graphroot` with this setup.
    operator-owned Quadlet source drop-in without editing the tracked base:
 
    ```bash
-   (
+   if (
      trap 'unset STAFF_PIN' EXIT
      read -r -s -p 'Staff PIN: ' STAFF_PIN
      printf '\n' >&2
-     if [[ ! "$STAFF_PIN" =~ ^[0-9]{6}$ ]]; then
-       printf 'PIN must be exactly six digits.\n' >&2
-       exit 1
+     if [[ "$STAFF_PIN" =~ ^[0-9]{6}$ ]]; then
+       printf %s "$STAFF_PIN" | ssh kiosk-host podman secret create photo-prompt-staff-pin -
+     else
+       printf 'PIN must be exactly six digits; secret was not created.\n' >&2
+       false
      fi
-     printf %s "$STAFF_PIN" | ssh kiosk-host podman secret create photo-prompt-staff-pin -
-   ) && \
-   ssh kiosk-host 'install -d -m 0755 "$HOME/.config/containers/systemd/photo-prompt.container.d"' && \
-   ssh kiosk-host 'cat > "$HOME/.config/containers/systemd/photo-prompt.container.d/10-staff-secret.conf"' <<'EOF' &&
-   [Container]
-   Secret=photo-prompt-staff-pin,type=env,target=PHOTO_PROMPT_STAFF_PIN
-   EOF
-   ssh kiosk-host systemctl --user daemon-reload
+   ); then
+     ssh kiosk-host 'install -d -m 0755 "$HOME/.config/containers/systemd/photo-prompt.container.d"' &&
+     printf "%s\n" "[Container]" "Secret=photo-prompt-staff-pin,type=env,target=PHOTO_PROMPT_STAFF_PIN" |
+       ssh kiosk-host 'cat > "$HOME/.config/containers/systemd/photo-prompt.container.d/10-staff-secret.conf"' &&
+     ssh kiosk-host systemctl --user daemon-reload
+   else
+     printf 'Staff secret setup failed; no drop-in was installed.\n' >&2
+     false
+   fi
    ```
 
    The PIN is entered only on the local no-echo prompt and stays outside TOML,
