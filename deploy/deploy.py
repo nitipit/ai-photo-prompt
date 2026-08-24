@@ -163,6 +163,8 @@ def _remote_health(host: str) -> dict[str, object]:
 
 
 def _require_idle(value: dict[str, object]) -> None:
+    if value.get("ready") is not True:
+        raise DeployError("deployment aborted while service is not ready")
     active = value.get("active_generation_count")
     if type(active) is not int or active < 0:
         raise DeployError("remote health did not report active generation count")
