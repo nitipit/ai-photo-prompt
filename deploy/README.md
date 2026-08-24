@@ -134,9 +134,24 @@ ssh kiosk-host podman run --rm --user 10001:10001 \
   localhost/photo-prompt:deploy -s /home/photo-prompt/.pi/agent/auth.json
 ```
 
-The image-generation bridge also uses the pinned Codex CLI. Authenticate it
-once with device auth; `CODEX_HOME=/home/photo-prompt/.pi/codex` keeps its
-credentials in the same persistent named volume without copying local auth:
+The image-generation bridge also uses the pinned Codex CLI. The application
+entrypoint creates `CODEX_HOME=/home/photo-prompt/.pi/codex` with mode `0700`
+after the existing Pi volume is mounted. Initialize and verify that directory
+explicitly before device login so upgrades from an older volume are safe:
+
+```bash
+ssh kiosk-host podman run --rm --user 10001:10001 \
+  --volume photo-prompt-pi-home:/home/photo-prompt/.pi:rw \
+  --entrypoint /usr/bin/install \
+  localhost/photo-prompt:deploy -d -m 0700 /home/photo-prompt/.pi/codex
+ssh kiosk-host podman run --rm --user 10001:10001 \
+  --volume photo-prompt-pi-home:/home/photo-prompt/.pi:ro \
+  --entrypoint /bin/sh \
+  localhost/photo-prompt:deploy -c 'test "$(stat -c %a "$CODEX_HOME")" = 700'
+```
+
+Authenticate it once with device auth. The existing named volume persists its
+credentials without copying local auth:
 
 ```bash
 ssh -t kiosk-host podman run --rm -it --user 10001:10001 \

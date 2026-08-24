@@ -36,7 +36,8 @@ def test_container_contract_builds_assets_in_builder_and_excludes_runtime_state(
     assert "RUN deno task app:build" in containerfile
     assert "COPY --from=builder /app/dist ./dist" in containerfile
     assert "COPY dist ./dist" not in containerfile
-    assert '"--workers", "1"' in containerfile
+    assert 'install -d -m 0700 \\"$CODEX_HOME\\" && exec /opt/venv/bin/uvicorn' in containerfile
+    assert "--port 8000 --workers 1" in containerfile
     assert "ARG CODEX_VERSION=0.147.0" in containerfile
     assert 'npm install --prefix /opt/codex "@openai/codex@${CODEX_VERSION}"' in containerfile
     assert "COPY --from=builder /opt/codex /opt/codex" in containerfile
@@ -665,6 +666,12 @@ def test_optional_secret_and_pod_level_network_are_documented() -> None:
     assert "photo-prompt-pi-home:/home/photo-prompt/.pi:rw" in readme
     assert "/home/photo-prompt/.pi/agent/auth.json" in readme
     assert "CODEX_HOME=/home/photo-prompt/.pi/codex" in readme
+    assert "--entrypoint /usr/bin/install" in readme
+    assert "-d -m 0700 /home/photo-prompt/.pi/codex" in readme
+    assert "stat -c %a" in readme
+    assert readme.index("-d -m 0700 /home/photo-prompt/.pi/codex") < readme.index(
+        "login --device-auth"
+    )
     assert "/opt/codex/node_modules/.bin/codex" in readme
     assert "login --device-auth" in readme
     assert "login status" in readme

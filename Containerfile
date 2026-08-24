@@ -57,4 +57,4 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
   CMD ["/opt/venv/bin/python", "-c", "import json,urllib.request; value=json.load(urllib.request.urlopen('http://127.0.0.1:8000/health',timeout=3)); raise SystemExit(0 if value.get('ready') is True else 1)"]
 
-ENTRYPOINT ["/opt/venv/bin/uvicorn", "app.server:app", "--app-dir", "src", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
+ENTRYPOINT ["/bin/sh", "-c", "install -d -m 0700 \"$CODEX_HOME\" && exec /opt/venv/bin/uvicorn app.server:app --app-dir src --host 0.0.0.0 --port 8000 --workers 1"]
