@@ -43,7 +43,7 @@
     <style id="photo-print-page-rules">
       @page {
         size: A5 landscape;
-        margin: 0;
+        margin: 5mm;
       }
     </style>
     <script type="module" src="/templates/_base.js"></script>
@@ -1533,8 +1533,9 @@
 
         .leaderboard-image-frame {
           position: relative;
-          width: 100%;
+          width: min(100%, 13cqh);
           aspect-ratio: 16 / 9;
+          justify-self: center;
           overflow: hidden;
           border: 1px solid rgba(245, 247, 239, 0.42);
           border-radius: 0.5rem;
@@ -1736,7 +1737,7 @@
           overflow: hidden;
           border: 0.35rem solid var(--paper);
           border-radius: 1.25rem;
-          background: var(--paper);
+          background: #fff;
           color: var(--navy-950);
           box-shadow:
             0 1.1rem 0 rgba(66, 214, 196, 0.24),
@@ -1760,6 +1761,7 @@
           gap: 0.55rem;
           min-width: 0;
           min-height: 0;
+          background: var(--paper);
         }
 
         .photo-print-sheet-header {
@@ -2005,8 +2007,8 @@
           }
 
           .photo-print-scene {
-            width: 210mm;
-            height: 148mm;
+            width: 200mm;
+            height: 138mm;
             max-width: none;
             max-height: none;
             background: #fff;
@@ -2023,20 +2025,20 @@
 
           .photo-print-layout {
             display: block;
-            width: 210mm;
-            height: 148mm;
+            width: 200mm;
+            height: 138mm;
             padding: 0;
           }
 
           .photo-print-preview {
             display: block;
-            width: 210mm;
-            height: 148mm;
+            width: 200mm;
+            height: 138mm;
           }
 
           .photo-print-sheet {
-            width: 210mm;
-            height: 148mm;
+            width: 200mm;
+            height: 138mm;
             border: 0;
             border-radius: 0;
             box-shadow: none;
@@ -2044,6 +2046,10 @@
 
           .photo-print-sheet::after {
             display: none;
+          }
+
+          .photo-print-inset {
+            inset: 0;
           }
 
           .photo-print-image {

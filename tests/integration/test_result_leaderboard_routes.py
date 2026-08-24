@@ -558,11 +558,20 @@ def test_leaderboard_frontend_contract_is_single_screen_without_list_clipping() 
             "        .leaderboard-row {", base_source.index("        .leaderboard-list {")
         )
     ]
+    image_frame_rule = base_source[
+        base_source.index("        .leaderboard-image-frame {") : base_source.index(
+            "        .leaderboard-image {",
+            base_source.index("        .leaderboard-image-frame {"),
+        )
+    ]
 
     assert "width: min(100vw, calc(100vh * 16 / 9));" in scene_rule
     assert "height: min(100vh, calc(100vw * 9 / 16));" in scene_rule
     assert "grid-template-rows: repeat(4" in list_rule
     assert "overflow" not in list_rule
+    assert "width: min(100%, 13cqh);" in image_frame_rule
+    assert "justify-self: center;" in image_frame_rule
+    assert "overflow: hidden;" in image_frame_rule
     assert 'data-leaderboard-deadline="{{ leaderboard_deadline }}"' in leaderboard_source
     assert 'data-current-round="{{ round_id }}"' in leaderboard_source
     assert 'data-photo-print-link="true"' in leaderboard_source
@@ -602,14 +611,21 @@ def test_photo_print_layout_preserves_a5_content_and_uses_upper_scene_image() ->
 
     assert '<style id="photo-print-page-rules">' in head_source
     assert "size: A5 landscape" in head_source
+    assert "margin: 5mm;" in head_source
     assert "inset: 5mm;" in base_source
+    assert "background: #fff;" in base_source
+    assert "background: var(--paper);" in base_source
     assert "grid-template-rows: minmax(0, 1fr) auto;" in content_rule
     assert "width: 89%;" in image_rule
     assert "max-width: 178mm;" in image_rule
     assert "aspect-ratio: 16 / 9;" in image_rule
     assert "grid-template-columns: minmax(0, 1fr) auto auto;" in details_rule
-    assert "width: 210mm;" in print_source
-    assert "height: 148mm;" in print_source
+    assert "width: 210mm;" not in print_source
+    assert "height: 148mm;" not in print_source
+    assert "width: 200mm;" in print_source
+    assert "height: 138mm;" in print_source
+    assert ".photo-print-inset {" in print_source
+    assert "inset: 0;" in print_source
     assert "object-fit: contain;" in base_source
     for content in (
         "PHOTO <strong>PROMPT</strong>",
