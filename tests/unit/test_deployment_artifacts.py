@@ -668,7 +668,8 @@ def test_optional_secret_and_pod_level_network_are_documented() -> None:
     assert "CODEX_HOME=/home/photo-prompt/.pi/codex" in readme
     assert "--entrypoint /usr/bin/install" in readme
     assert "-d -m 0700 /home/photo-prompt/.pi/codex" in readme
-    assert "stat -c %a" in readme
+    assert "--entrypoint /usr/bin/stat" in readme
+    assert "-c %u:%g:%a /home/photo-prompt/.pi/codex | grep -qx '10001:10001:700'" in readme
     assert readme.index("-d -m 0700 /home/photo-prompt/.pi/codex") < readme.index(
         "login --device-auth"
     )
@@ -680,6 +681,42 @@ def test_optional_secret_and_pod_level_network_are_documented() -> None:
     assert "photo-prompt.container.d/20-boot.conf" in readme
     assert "[Install]\nWantedBy=default.target" in readme
     assert "default.target.wants" in readme
+
+
+def test_codex_home_verification_survives_ssh_argument_joining(tmp_path: Path) -> None:
+    readme = (DEPLOY / "README.md").read_text(encoding="utf-8")
+    section = readme.split("The image-generation bridge", 1)[1]
+    fenced_block = section.split("```bash\n", 1)[1].split("\n```", 1)[0]
+    script = tmp_path / "codex-home.sh"
+    script.write_text(textwrap.dedent(fenced_block), encoding="utf-8")
+    assert subprocess.run(["bash", "-n", str(script)], check=False).returncode == 0
+
+    fake_ssh = tmp_path / "ssh"
+    fake_ssh.write_text(
+        """#!/bin/sh
+set -eu
+printf '%s\\n' "$*" >> "$FAKE_LOG"
+case "$*" in
+  *"--entrypoint /usr/bin/install"*) exit 0 ;;
+  *"--entrypoint /usr/bin/stat"*) printf '%s\\n' "${FAKE_STAT:-10001:10001:700}" ;;
+  *) exit 2 ;;
+esac
+""",
+        encoding="utf-8",
+    )
+    fake_ssh.chmod(0o755)
+    log = tmp_path / "ssh-args"
+    env = {
+        **os.environ,
+        "PATH": f"{tmp_path}{os.pathsep}{os.environ['PATH']}",
+        "FAKE_LOG": str(log),
+    }
+    assert subprocess.run(["bash", str(script)], env=env, check=False).returncode == 0
+    commands = log.read_text(encoding="utf-8").splitlines()
+    assert "--entrypoint /usr/bin/stat" in commands[1]
+    assert "-c %u:%g:%a /home/photo-prompt/.pi/codex" in commands[1]
+    failed_env = {**env, "FAKE_STAT": "10001:10001:755"}
+    assert subprocess.run(["bash", str(script)], env=failed_env, check=False).returncode != 0
 
 
 def test_staff_secret_runbook_block_is_valid_and_preserves_secret_bytes(

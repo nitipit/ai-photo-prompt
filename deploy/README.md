@@ -146,8 +146,9 @@ ssh kiosk-host podman run --rm --user 10001:10001 \
   localhost/photo-prompt:deploy -d -m 0700 /home/photo-prompt/.pi/codex
 ssh kiosk-host podman run --rm --user 10001:10001 \
   --volume photo-prompt-pi-home:/home/photo-prompt/.pi:ro \
-  --entrypoint /bin/sh \
-  localhost/photo-prompt:deploy -c 'test "$(stat -c %a "$CODEX_HOME")" = 700'
+  --entrypoint /usr/bin/stat \
+  localhost/photo-prompt:deploy \
+  -c %u:%g:%a /home/photo-prompt/.pi/codex | grep -qx '10001:10001:700'
 ```
 
 Authenticate it once with device auth. The existing named volume persists its
