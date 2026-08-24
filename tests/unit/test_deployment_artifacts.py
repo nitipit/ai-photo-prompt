@@ -643,7 +643,7 @@ def test_optional_secret_and_pod_level_network_are_documented() -> None:
     assert "chmod 0644" in readme
     assert 'ssh -t kiosk-host sudo loginctl enable-linger "$ROOTLESS_USER"' in readme
     assert (
-        "ssh kiosk-host 'loginctl show-user \"$ROOTLESS_USER\" -p Linger --value | grep -qx yes'"
+        'ssh kiosk-host loginctl show-user "$ROOTLESS_USER" -p Linger --value | grep -qx yes'
         in readme
     )
     assert "systemctl --user enable" not in readme

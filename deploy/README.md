@@ -19,7 +19,7 @@ rootful Caddy container or a different rootless `graphroot` with this setup.
    # Run the privileged linger step separately; replace the placeholder user.
    ROOTLESS_USER=photo-prompt-operator
    ssh -t kiosk-host sudo loginctl enable-linger "$ROOTLESS_USER"
-   ssh kiosk-host 'loginctl show-user "$ROOTLESS_USER" -p Linger --value | grep -qx yes'
+   ssh kiosk-host loginctl show-user "$ROOTLESS_USER" -p Linger --value | grep -qx yes
    ssh kiosk-host 'install -d -m 0755 "$HOME/.config/containers/systemd"'
    rsync -a \
      deploy/photo-prompt.network \
