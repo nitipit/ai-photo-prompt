@@ -134,6 +134,21 @@ ssh kiosk-host podman run --rm --user 10001:10001 \
   localhost/photo-prompt:deploy -s /home/photo-prompt/.pi/agent/auth.json
 ```
 
+The image-generation bridge also uses the pinned Codex CLI. Authenticate it
+once with device auth; `CODEX_HOME=/home/photo-prompt/.pi/codex` keeps its
+credentials in the same persistent named volume without copying local auth:
+
+```bash
+ssh -t kiosk-host podman run --rm -it --user 10001:10001 \
+  --volume photo-prompt-pi-home:/home/photo-prompt/.pi:rw \
+  --entrypoint /opt/codex/node_modules/.bin/codex \
+  localhost/photo-prompt:deploy login --device-auth
+ssh kiosk-host podman run --rm --user 10001:10001 \
+  --volume photo-prompt-pi-home:/home/photo-prompt/.pi:rw \
+  --entrypoint /opt/codex/node_modules/.bin/codex \
+  localhost/photo-prompt:deploy login status
+```
+
 If the staff-secret drop-in is enabled, verify the injected PIN without
 printing it. This is a non-PTY, nonprinting check after app readiness:
 

@@ -37,6 +37,11 @@ def test_container_contract_builds_assets_in_builder_and_excludes_runtime_state(
     assert "COPY --from=builder /app/dist ./dist" in containerfile
     assert "COPY dist ./dist" not in containerfile
     assert '"--workers", "1"' in containerfile
+    assert "ARG CODEX_VERSION=0.147.0" in containerfile
+    assert 'npm install --prefix /opt/codex "@openai/codex@${CODEX_VERSION}"' in containerfile
+    assert "COPY --from=builder /opt/codex /opt/codex" in containerfile
+    assert "CODEX_HOME=/home/photo-prompt/.pi/codex" in containerfile
+    assert "/opt/codex/node_modules/.bin" in containerfile
     assert "conf/app.toml" in ignore
     for excluded in (".git", ".agents", "data", "discord-webhook", "*.secret"):
         assert excluded in ignore
@@ -659,6 +664,10 @@ def test_optional_secret_and_pod_level_network_are_documented() -> None:
     assert "ssh kiosk-host podman run --rm --user 10001:10001" in readme
     assert "photo-prompt-pi-home:/home/photo-prompt/.pi:rw" in readme
     assert "/home/photo-prompt/.pi/agent/auth.json" in readme
+    assert "CODEX_HOME=/home/photo-prompt/.pi/codex" in readme
+    assert "/opt/codex/node_modules/.bin/codex" in readme
+    assert "login --device-auth" in readme
+    assert "login status" in readme
     assert "ssh kiosk-host podman exec photo-prompt /opt/venv/bin/python -c" in readme
     assert 're.fullmatch(r"[0-9]{6}", os.environ.get("PHOTO_PROMPT_STAFF_PIN", ""))' in readme
     assert "photo-prompt.container.d/20-boot.conf" in readme

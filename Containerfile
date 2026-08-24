@@ -3,6 +3,7 @@
 FROM registry.fedoraproject.org/fedora:44@sha256:e82672761671216fdd87c14d90379ad4368ab0200f072f9dffa5bd0459302f33 AS builder
 
 ARG PI_VERSION=0.84.3
+ARG CODEX_VERSION=0.147.0
 ARG UV_VERSION=0.8.17
 ARG DENO_VERSION=2.7.14
 WORKDIR /app
@@ -22,13 +23,14 @@ COPY design ./design
 COPY deno.json deno.lock package.json ./
 RUN UV_PROJECT_ENVIRONMENT=/opt/venv /opt/venv/bin/uv sync --locked --no-dev
 RUN deno task app:build
-RUN npm install --prefix /opt/pi "@earendil-works/pi-coding-agent@${PI_VERSION}"
+RUN npm install --prefix /opt/pi "@earendil-works/pi-coding-agent@${PI_VERSION}" \
+    && npm install --prefix /opt/codex "@openai/codex@${CODEX_VERSION}"
 
 FROM registry.fedoraproject.org/fedora:44@sha256:e82672761671216fdd87c14d90379ad4368ab0200f072f9dffa5bd0459302f33 AS runtime
 
-ARG PI_VERSION=0.84.3
 WORKDIR /app
-ENV PATH="/opt/venv/bin:/opt/pi/node_modules/.bin:/usr/local/bin:${PATH}" \
+ENV PATH="/opt/venv/bin:/opt/pi/node_modules/.bin:/opt/codex/node_modules/.bin:/usr/local/bin:${PATH}" \
+    CODEX_HOME=/home/photo-prompt/.pi/codex \
     PHOTO_PROMPT_CONFIG=/etc/photo-prompt/app.toml \
     PYTHONUNBUFFERED=1
 
@@ -36,11 +38,12 @@ RUN dnf install -y --setopt=install_weak_deps=False python3 nodejs \
     && dnf clean all \
     && rm -rf /var/cache/dnf \
     && useradd --system --uid 10001 --home-dir /home/photo-prompt --create-home --shell /sbin/nologin photo-prompt \
-    && mkdir -p /etc/photo-prompt /var/lib/photo-prompt/state /var/lib/photo-prompt/generated /home/photo-prompt/.pi /run/photo-prompt/pi-rpc \
+    && mkdir -p /etc/photo-prompt /var/lib/photo-prompt/state /var/lib/photo-prompt/generated /home/photo-prompt/.pi/codex /run/photo-prompt/pi-rpc \
     && chown -R photo-prompt:photo-prompt /var/lib/photo-prompt /home/photo-prompt /run/photo-prompt
 
 COPY --from=builder /opt/venv /opt/venv
 COPY --from=builder /opt/pi /opt/pi
+COPY --from=builder /opt/codex /opt/codex
 COPY src ./src
 COPY --from=builder /app/dist ./dist
 COPY conf/app.sample.toml ./conf/app.sample.toml
