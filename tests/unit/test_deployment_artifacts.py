@@ -604,8 +604,10 @@ def test_optional_secret_and_pod_level_network_are_documented() -> None:
     assert "Network=<existing-caddy-network>\nNetwork=photo-prompt.network" in readme
     assert "reverse_proxy photo-prompt:8000" in readme
     assert "podman pull --platform linux/amd64" in readme
+    assert "ssh -t kiosk-host podman run --rm -it" in readme
+    assert "ssh kiosk-host podman run --rm --user 10001:10001" in readme
     assert "photo-prompt-pi-home:/home/photo-prompt/.pi:rw" in readme
-    assert "auth.json" in readme
+    assert "/home/photo-prompt/.pi/agent/auth.json" in readme
 
 
 def _next_health(values: list[Any]) -> Any:

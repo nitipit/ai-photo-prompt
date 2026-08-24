@@ -100,7 +100,7 @@ mounts the persisted volume; at the Pi prompt enter `/login`, select the
 OpenAI Codex provider, and complete the device-code flow:
 
 ```bash
-podman run --rm -it \
+ssh -t kiosk-host podman run --rm -it \
   --user 10001:10001 \
   --volume photo-prompt-pi-home:/home/photo-prompt/.pi:rw \
   --workdir /app \
@@ -111,10 +111,10 @@ podman run --rm -it \
 Verify persistence without printing the credential contents:
 
 ```bash
-podman run --rm --user 10001:10001 \
+ssh kiosk-host podman run --rm --user 10001:10001 \
   --volume photo-prompt-pi-home:/home/photo-prompt/.pi:ro \
   --entrypoint /usr/bin/test \
-  localhost/photo-prompt:deploy -s /home/photo-prompt/.pi/auth.json
+  localhost/photo-prompt:deploy -s /home/photo-prompt/.pi/agent/auth.json
 ```
 
 After both app readiness and the `auth.json` check succeed, add the durable
