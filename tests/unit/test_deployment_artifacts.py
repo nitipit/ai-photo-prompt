@@ -82,6 +82,7 @@ def test_quadlets_parse_and_generate_expected_boot_links(tmp_path: Path) -> None
     assert "photo-prompt-pod.service" in dryrun.stdout
     assert "Requires=photo-prompt-pod.service photo-prompt-network.service" in dryrun.stdout
     assert "BindsTo=photo-prompt-pod.service" in dryrun.stdout
+    assert "--init" in dryrun.stdout
     assert "photo-prompt-staff-pin" in dryrun.stdout
 
     def generate(output_root: Path) -> Path:
@@ -636,6 +637,7 @@ def test_optional_secret_and_pod_level_network_are_documented() -> None:
     assert "[Install]" not in container
     assert "[Install]" not in pod
     assert "Volume=%h/photo-prompt/app.toml:/etc/photo-prompt/app.toml:ro,z" in container
+    assert "PodmanArgs=--init" in container
     assert "Network=photo-prompt.network" in pod
     assert "Secret=photo-prompt-staff-pin,type=env,target=PHOTO_PROMPT_STAFF_PIN" in readme
     assert "photo-prompt.container.d/10-staff-secret.conf" in readme

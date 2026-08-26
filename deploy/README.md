@@ -231,8 +231,10 @@ uv run --script deploy/deploy.py deploy --host kiosk-host
 The preflight requires `HEAD == origin/main`, builds frontend assets and the
 image locally, tags the image by the exact commit SHA, transfers only the OCI
 image archive, verifies its SHA-256 after transfer, and loads the SHA-tagged
-image remotely. Before changing the service, it validates the host's active
-`~/photo-prompt/app.toml` by mounting it read-only into the new image. If the
+image remotely. The app Quadlet starts Podman's init process so orphaned AI
+subprocesses are reaped instead of consuming the service task limit. Before
+changing the service, it validates the host's active `~/photo-prompt/app.toml`
+by mounting it read-only into the new image. If the
 existing app container is present, its non-sensitive health projection must be
 valid and idle; an absent container is treated as the first deployment. It tags
 the new image as `:deploy`, settles a service stop, starts it fresh so systemd

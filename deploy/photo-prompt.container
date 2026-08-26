@@ -6,6 +6,7 @@ After=photo-prompt.pod photo-prompt.network
 [Container]
 ContainerName=photo-prompt
 Image=localhost/photo-prompt:deploy
+PodmanArgs=--init
 Pod=photo-prompt.pod
 User=10001:10001
 WorkingDir=/app
