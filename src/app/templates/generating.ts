@@ -8,7 +8,7 @@ type GenerationState =
   | "conflict";
 
 const POLL_INTERVAL_MS = 250;
-const REVEAL_SAFETY_BUFFER_MS = 1000;
+const REVEAL_DISPLAY_MS = 5000;
 const root = document.querySelector("component-shell")?.shadowRoot ?? document;
 const scene = root.querySelector<HTMLElement>('[data-scene="generating"]');
 const runForm = root.querySelector<HTMLFormElement>("#generating-run-form");
@@ -196,16 +196,13 @@ if (scene) {
 if (scene?.dataset.generatingState === "generated" && continueForm) {
   let continued = false;
   let revealReady = false;
+  let countdownStarted = false;
   const continueButton = continueForm.querySelector<HTMLButtonElement>(
     "#continue-generating-button",
   );
-  const revealDeadline = scene.dataset.revealDeadline;
-  const parsedDeadline = revealDeadline
-    ? Date.parse(revealDeadline)
-    : Number.NaN;
-  const delay = Number.isFinite(parsedDeadline)
-    ? Math.max(0, parsedDeadline - Date.now() + REVEAL_SAFETY_BUFFER_MS)
-    : 5000 + REVEAL_SAFETY_BUFFER_MS;
+  const generatedImage = scene.querySelector<HTMLImageElement>(
+    "#generating-image",
+  );
 
   const continueOnce = (): void => {
     if (continued) {
@@ -215,6 +212,20 @@ if (scene?.dataset.generatingState === "generated" && continueForm) {
     continueForm.requestSubmit();
   };
 
+  const startRevealCountdown = (): void => {
+    if (countdownStarted) {
+      return;
+    }
+    countdownStarted = true;
+    globalThis.setTimeout(() => {
+      revealReady = true;
+      if (continueButton) {
+        continueButton.disabled = false;
+      }
+      continueOnce();
+    }, REVEAL_DISPLAY_MS);
+  };
+
   continueForm.addEventListener("submit", (event) => {
     if (!revealReady) {
       event.preventDefault();
@@ -222,11 +233,13 @@ if (scene?.dataset.generatingState === "generated" && continueForm) {
     }
     continued = true;
   });
-  globalThis.setTimeout(() => {
-    revealReady = true;
-    if (continueButton) {
-      continueButton.disabled = false;
+
+  if (generatedImage) {
+    generatedImage.addEventListener("load", startRevealCountdown, {
+      once: true,
+    });
+    if (generatedImage.complete && generatedImage.naturalWidth > 0) {
+      startRevealCountdown();
     }
-    continueOnce();
-  }, delay);
+  }
 }
