@@ -761,8 +761,13 @@ async def continue_generation(request: Request, round_id: str) -> RedirectRespon
         await request.app.state.game_round_service.show_result(round_id)
     except RoundNotFoundError as error:
         raise HTTPException(status_code=404, detail="Round not found") from error
-    except GameRoundDeadlineError as error:
-        raise HTTPException(status_code=422, detail=str(error)) from error
+    except GameRoundDeadlineError:
+        # A browser timer may fire a fraction before the server-owned deadline.
+        # Preserve the state-machine guard and return to the reveal scene instead
+        # of exposing a transient timing error to the player.
+        return RedirectResponse(
+            url=f"/rounds/{round_id}/generating", status_code=303
+        )
     except GameRoundValidationError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
     except GameRoundConflictError as error:

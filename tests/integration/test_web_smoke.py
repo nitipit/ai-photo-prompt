@@ -161,6 +161,7 @@ def test_persisted_generation_reveals_artifact_and_reaches_result(
         assert "โหมดสาธิต" not in generated.text
         assert 'data-reveal-deadline="' in generated.text
         assert 'id="continue-generating-button" type="submit" disabled' in generated.text
+        assert 'src="/templates/generating.js?v=reveal-transition-v2"' in generated.text
         assert 'data-generated-score="79"' in generated.text
         assert 'name="challenge_id"' not in generated.text
         assert 'name="prompt"' not in generated.text

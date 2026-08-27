@@ -135,8 +135,8 @@ def test_result_flow_uses_persisted_lifecycle_and_ignores_tampering(runtime_app)
             data={"challenge_id": "attacker", "prompt": "attacker"},
             follow_redirects=False,
         )
-        assert early.status_code == 422
-        assert "reveal deadline has not elapsed" in early.json()["detail"]
+        assert early.status_code == 303
+        assert early.headers["location"] == f"/rounds/{round_id}/generating"
         assert _stored_record(runtime_app, round_id).dict() == before
 
         _set_clock_at(runtime_app, generated.reveal_deadline)
