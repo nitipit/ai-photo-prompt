@@ -8,6 +8,7 @@ type GenerationState =
   | "conflict";
 
 const POLL_INTERVAL_MS = 250;
+const REVEAL_SAFETY_BUFFER_MS = 1000;
 const root = document.querySelector("component-shell")?.shadowRoot ?? document;
 const scene = root.querySelector<HTMLElement>('[data-scene="generating"]');
 const runForm = root.querySelector<HTMLFormElement>("#generating-run-form");
@@ -194,13 +195,17 @@ if (scene) {
 
 if (scene?.dataset.generatingState === "generated" && continueForm) {
   let continued = false;
+  let revealReady = false;
+  const continueButton = continueForm.querySelector<HTMLButtonElement>(
+    "#continue-generating-button",
+  );
   const revealDeadline = scene.dataset.revealDeadline;
   const parsedDeadline = revealDeadline
     ? Date.parse(revealDeadline)
     : Number.NaN;
   const delay = Number.isFinite(parsedDeadline)
-    ? Math.min(5000, Math.max(0, parsedDeadline - Date.now()))
-    : 5000;
+    ? Math.max(0, parsedDeadline - Date.now() + REVEAL_SAFETY_BUFFER_MS)
+    : 5000 + REVEAL_SAFETY_BUFFER_MS;
 
   const continueOnce = (): void => {
     if (continued) {
@@ -210,8 +215,18 @@ if (scene?.dataset.generatingState === "generated" && continueForm) {
     continueForm.requestSubmit();
   };
 
-  continueForm.addEventListener("submit", () => {
+  continueForm.addEventListener("submit", (event) => {
+    if (!revealReady) {
+      event.preventDefault();
+      return;
+    }
     continued = true;
   });
-  globalThis.setTimeout(continueOnce, delay);
+  globalThis.setTimeout(() => {
+    revealReady = true;
+    if (continueButton) {
+      continueButton.disabled = false;
+    }
+    continueOnce();
+  }, delay);
 }
